@@ -92,11 +92,14 @@ function WorkspacePageContent() {
       role: 'human',
     });
 
+    setIsLoading(true);
     fetchProject(token);
-  }, [projectId, router]);
+  }, [projectId]);
 
   const fetchProject = async (token: string) => {
     if (!projectId || Array.isArray(projectId)) return;
+    
+    console.log('Starting fetchProject...');
     
     try {
       console.log('Fetching project:', projectId);
@@ -113,14 +116,15 @@ function WorkspacePageContent() {
       }
 
       const data = await res.json();
-      console.log('Project data:', data);
+      console.log('Project data received:', data);
       setProject(data);
       setSession(data.id, data.name);
       setConnected(true);
+      setIsLoading(false);
+      console.log('Project loaded successfully');
     } catch (err: any) {
       console.error('Fetch error:', err);
       setError(err.message);
-    } finally {
       setIsLoading(false);
     }
   };
