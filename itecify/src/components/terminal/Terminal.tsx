@@ -1,9 +1,6 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
-import { Terminal as XTerminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { Trash2, Copy, Download, Filter } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Trash2, Copy, Download } from 'lucide-react';
 import { useToast } from '@/components/ui/Toast';
-import '@xterm/xterm/css/xterm.css';
 
 interface TerminalProps {
   onCommand?: (command: string) => void;
@@ -12,140 +9,56 @@ interface TerminalProps {
 
 export function Terminal({ onCommand, output }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<XTerminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
   const [filter, setFilter] = useState<'all' | 'stdout' | 'stderr'>('all');
   const { addToast } = useToast();
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [currentInput, setCurrentInput] = useState('');
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (!terminalRef.current || xtermRef.current) return;
-
-    const xterm = new XTerminal({
-      theme: {
-        background: '#0d1117',
-        foreground: '#f1f5f9',
-        cursor: '#3b82f6',
-        cursorAccent: '#0d1117',
-        selectionBackground: 'rgba(59, 130, 246, 0.3)',
-        black: '#0d1117',
-        red: '#ff7b72',
-        green: '#3fb950',
-        yellow: '#d29922',
-        blue: '#58a6ff',
-        magenta: '#bc8cff',
-        cyan: '#39c5cf',
-        white: '#f1f5f9',
-        brightBlack: '#6e7681',
-        brightRed: '#ffa198',
-        brightGreen: '#56d364',
-        brightYellow: '#e3b341',
-        brightBlue: '#79c0ff',
-        brightMagenta: '#d2a8ff',
-        brightCyan: '#56d4dd',
-        brightWhite: '#ffffff',
-      },
-      fontFamily: "'JetBrains Mono', monospace",
-      fontSize: 13,
-      lineHeight: 1.4,
-      cursorBlink: true,
-      cursorStyle: 'block',
-      scrollback: 10000,
-    });
-
-    const fitAddon = new FitAddon();
-    xterm.loadAddon(fitAddon);
-    xterm.open(terminalRef.current);
-    fitAddon.fit();
-
-    xtermRef.current = xterm;
-    fitAddonRef.current = fitAddon;
-
-    xterm.writeln('\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
-    xterm.writeln('\x1b[1;36m  iTECify Terminal v1.0\x1b[0m');
-    xterm.writeln('\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
-    xterm.writeln('');
-    xterm.writeln('\x1b[90mReady for commands. Press Enter to execute.\x1b[0m');
-    xterm.writeln('');
-
-    let currentLine = '';
-    xterm.onData((data) => {
-      const code = data.charCodeAt(0);
-
-      if (code === 13) {
-        xterm.writeln('');
-        if (currentLine.trim()) {
-          onCommand?.(currentLine.trim());
-        }
-        currentLine = '';
-      } else if (code === 127) {
-        if (currentLine.length > 0) {
-          currentLine = currentLine.slice(0, -1);
-          xterm.write('\b \b');
-        }
-      } else if (code >= 32) {
-        currentLine += data;
-        xterm.write(data);
-      }
-    });
-
-    return () => {
-      xterm.dispose();
-      xtermRef.current = null;
-    };
-  }, [onCommand]);
-
-  useEffect(() => {
-    if (output && xtermRef.current) {
-      const lines = output.split('\n');
-      lines.forEach(line => {
-        if (line.startsWith('[ERROR]') || line.startsWith('Error:')) {
-          xtermRef.current?.writeln(`\x1b[31m${line}\x1b[0m`);
-        } else if (line.startsWith('[WARN]')) {
-          xtermRef.current?.writeln(`\x1b[33m${line}\x1b[0m`);
-        } else {
-          xtermRef.current?.writeln(line);
-        }
-      });
-      xtermRef.current?.scrollToBottom();
+  const handleSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    if (currentInput.trim()) {
+      onCommand?.(currentInput.trim());
+      setCommandHistory(prev => [...prev, currentInput]);
+      setCurrentInput('');
+      setHistoryIndex(-1);
     }
-  }, [output]);
+  }, [currentInput, onCommand]);
 
-  useEffect(() => {
-    if (!terminalRef.current) return;
-    
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddonRef.current?.fit();
-    });
-    resizeObserver.observe(terminalRef.current);
-    
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, []);
-
-  const handleClear = useCallback(() => {
-    xtermRef.current?.clear();
-    xtermRef.current?.writeln('\x1b[90mTerminal cleared\x1b[0m');
-  }, []);
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (commandHistory.length > 0) {
+        const newIndex = historyIndex < commandHistory.length - 1 ? historyIndex + 1 : historyIndex;
+        setHistoryIndex(newIndex);
+        setCurrentInput(commandHistory[commandHistory.length - 1 - newIndex] || '');
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIndex > 0) {
+        const newIndex = historyIndex - 1;
+        setHistoryIndex(newIndex);
+        setCurrentInput(commandHistory[commandHistory.length - 1 - newIndex] || '');
+      } else if (historyIndex === 0) {
+        setHistoryIndex(-1);
+        setCurrentInput('');
+      }
+    }
+  }, [commandHistory, historyIndex]);
 
   const handleCopy = useCallback(() => {
-    if (xtermRef.current) {
-      const selection = xtermRef.current.getSelection();
-      if (selection) {
-        navigator.clipboard.writeText(selection);
-        addToast('success', 'Output copied to clipboard');
-      }
+    if (terminalRef.current) {
+      const text = terminalRef.current.innerText;
+      navigator.clipboard.writeText(text);
+      addToast('success', 'Output copied to clipboard');
     }
   }, [addToast]);
 
   const handleDownload = useCallback(() => {
-    if (xtermRef.current) {
-      const buffer = xtermRef.current.buffer.active;
-      let output = '';
-      for (let i = 0; i < buffer.length; i++) {
-        output += buffer.getLine(i)?.translateToString() + '\n';
-      }
-      const blob = new Blob([output], { type: 'text/plain' });
+    if (terminalRef.current) {
+      const text = terminalRef.current.innerText;
+      const blob = new Blob([text], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -155,6 +68,23 @@ export function Terminal({ onCommand, output }: TerminalProps) {
       addToast('success', 'Output downloaded');
     }
   }, [addToast]);
+
+  const handleClear = useCallback(() => {
+    if (terminalRef.current) {
+      terminalRef.current.innerHTML = `
+        <div class="text-cyan-400 mb-2">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+        <div class="text-cyan-400 font-bold mb-2">  iTECify Terminal v1.0</div>
+        <div class="text-cyan-400 mb-4">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+        <div class="text-slate-500">Terminal cleared</div>
+      `;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (terminalRef.current && output) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [output]);
 
   return (
     <div className="flex flex-col h-full bg-[#0d1117] rounded-lg overflow-hidden border border-slate-700">
@@ -168,18 +98,6 @@ export function Terminal({ onCommand, output }: TerminalProps) {
           <span className="text-xs text-slate-400 font-mono ml-2">Terminal</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value as typeof filter)}
-              className="appearance-none bg-slate-700 text-slate-300 text-xs px-2 py-1 pr-6 rounded cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="all">All</option>
-              <option value="stdout">Stdout</option>
-              <option value="stderr">Stderr</option>
-            </select>
-            <Filter size={12} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
           <button
             onClick={handleCopy}
             className="p-1.5 hover:bg-slate-700 rounded transition text-slate-400 hover:text-white"
@@ -203,7 +121,41 @@ export function Terminal({ onCommand, output }: TerminalProps) {
           </button>
         </div>
       </div>
-      <div ref={terminalRef} className="flex-1 terminal-gradient" />
+      <div 
+        ref={terminalRef}
+        className="flex-1 overflow-auto p-4 font-mono text-sm"
+        onClick={() => inputRef.current?.focus()}
+      >
+        <div className="text-cyan-400 mb-2">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+        <div className="text-cyan-400 font-bold mb-2">  iTECify Terminal v1.0</div>
+        <div className="text-cyan-400 mb-4">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+        {output && output.split('\n').map((line, i) => {
+          let className = 'text-slate-300';
+          if (line.includes('Error') || line.includes('✗')) {
+            className = 'text-red-400';
+          } else if (line.includes('Warning') || line.includes('⚠')) {
+            className = 'text-yellow-400';
+          } else if (line.includes('✓') || line.includes('success')) {
+            className = 'text-green-400';
+          } else if (line.startsWith('$')) {
+            className = 'text-blue-400';
+          }
+          return <div key={i} className={className}>{line}</div>;
+        })}
+      </div>
+      <form onSubmit={handleSubmit} className="flex items-center bg-slate-800 border-t border-slate-700 px-4 py-2">
+        <span className="text-blue-400 mr-2">$</span>
+        <input
+          ref={inputRef}
+          type="text"
+          value={currentInput}
+          onChange={(e) => setCurrentInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          className="flex-1 bg-transparent text-slate-200 outline-none font-mono text-sm"
+          placeholder="Type a command..."
+          autoFocus
+        />
+      </form>
     </div>
   );
 }
