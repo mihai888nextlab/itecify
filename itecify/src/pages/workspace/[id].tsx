@@ -1,4 +1,4 @@
-import React, { useEffect, useState, Component, ErrorInfo, ReactNode } from 'react';
+import React, { useEffect, useState, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import { useRouter } from 'next/router';
 import { WorkspaceLayout } from '@/components/layout/WorkspaceLayout';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -64,26 +64,24 @@ function WorkspacePageContent() {
   const [userData, setUserData] = useState<UserData | null>(null);
   const { setSession, setCurrentUser, setConnected } = useSessionStore();
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    console.log('useEffect running, projectId:', projectId);
+    mountedRef.current = true;
+    
     const token = localStorage.getItem('accessToken');
     const storedUser = localStorage.getItem('user');
 
     if (!token || !storedUser) {
-      console.log('No token or user, redirecting to login');
       router.push('/auth/login');
       return;
     }
 
     if (!projectId || Array.isArray(projectId)) {
-      console.log('No projectId, redirecting to dashboard');
-      router.push('/dashboard');
       return;
     }
 
     const user = JSON.parse(storedUser);
-    console.log('User logged in:', user.name);
     setUserData(user);
     setCurrentUser({
       id: user.id,
@@ -92,42 +90,32 @@ function WorkspacePageContent() {
       role: 'human',
     });
 
-    setIsLoading(true);
-    fetchProject(token);
-  }, [projectId]);
-
-  const fetchProject = async (token: string) => {
-    if (!projectId || Array.isArray(projectId)) return;
-    
-    console.log('Starting fetchProject...');
-    
-    try {
-      console.log('Fetching project:', projectId);
-      const res = await fetch(`${API_URL}/api/projects/${projectId}`, {
-        headers: { Authorization: `Bearer ${token}` },
+    fetch(`${API_URL}/api/projects/${projectId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to fetch project');
+        return res.json();
+      })
+      .then(data => {
+        if (mountedRef.current) {
+          setProject(data);
+          setSession(data.id, data.name);
+          setConnected(true);
+          setIsLoading(false);
+        }
+      })
+      .catch(err => {
+        if (mountedRef.current) {
+          setError(err.message);
+          setIsLoading(false);
+        }
       });
 
-      console.log('Response status:', res.status);
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error('Error response:', errorText);
-        throw new Error(`Failed to fetch project: ${res.status}`);
-      }
-
-      const data = await res.json();
-      console.log('Project data received:', data);
-      setProject(data);
-      setSession(data.id, data.name);
-      setConnected(true);
-      setIsLoading(false);
-      console.log('Project loaded successfully');
-    } catch (err: any) {
-      console.error('Fetch error:', err);
-      setError(err.message);
-      setIsLoading(false);
-    }
-  };
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [projectId]);
 
   if (isLoading) {
     return (
@@ -158,8 +146,6 @@ function WorkspacePageContent() {
       <div className="h-screen flex items-center justify-center bg-[#020617]">
         <div className="text-center">
           <p className="text-slate-400 mb-4">Project not found</p>
-          <p className="text-slate-500 text-sm">project: {JSON.stringify(project)}</p>
-          <p className="text-slate-500 text-sm">userData: {JSON.stringify(userData)}</p>
           <button onClick={() => router.push('/dashboard')} className="text-blue-400 hover:underline">
             Back to Dashboard
           </button>
@@ -168,20 +154,16 @@ function WorkspacePageContent() {
     );
   }
 
-  console.log('Rendering WorkspaceLayout with:', { projectId: project.id, userId: userData.id });
-  
   return (
-    <ErrorBoundary>
-      <WorkspaceLayout
-        sessionId={project.id}
-        currentUser={{
-          id: userData.id,
-          name: userData.name || 'User',
-          color: '#3b82f6',
-        }}
-        project={project}
-      />
-    </ErrorBoundary>
+    <WorkspaceLayout
+      sessionId={project.id}
+      currentUser={{
+        id: userData.id,
+        name: userData.name || 'User',
+        color: '#3b82f6',
+      }}
+      project={project}
+    />
   );
 }
 
