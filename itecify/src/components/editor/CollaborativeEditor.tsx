@@ -117,16 +117,20 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
 
       provider.awareness.on('change', () => {
         const states = provider.awareness.getStates();
+        const localClientId = ydoc.clientID;
         const users: User[] = [];
         states.forEach((state: any, clientId: number) => {
-          if (state.user && clientId !== ydoc.clientID) {
-            users.push({
-              id: String(clientId),
-              name: state.user.name || 'Anonymous',
-              color: state.user.color || '#3b82f6',
-              role: 'human',
-              cursorPosition: state.cursor,
-            });
+          if (state.user && clientId !== localClientId) {
+            const existing = users.find(u => u.name === state.user.name);
+            if (!existing) {
+              users.push({
+                id: String(clientId),
+                name: state.user.name || 'Anonymous',
+                color: state.user.color || '#3b82f6',
+                role: 'human',
+                cursorPosition: state.cursor,
+              });
+            }
           }
         });
         setConnectedUsers(users);
