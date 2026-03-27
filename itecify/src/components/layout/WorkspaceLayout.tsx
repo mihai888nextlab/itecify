@@ -195,10 +195,13 @@ try {
 
         <main className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 flex flex-col overflow-hidden">
-            <CollaborativeEditor
+            <div className="h-full bg-green-900 flex items-center justify-center text-white">
+              <p>Editor loading... sessionId: {sessionId}</p>
+            </div>
+            {/* <CollaborativeEditor
               projectId={sessionId}
               user={currentUser}
-            />
+            /> */}
           </div>
 
           <div
@@ -230,11 +233,8 @@ try {
             </div>
             
             {!isTerminalCollapsed && (
-              <div className="h-[calc(100%-36px)]">
-                <Terminal
-                  onCommand={handleTerminalCommand}
-                  output={terminalOutput}
-                />
+              <div className="h-[calc(100%-36px)] bg-slate-800 flex items-center justify-center text-slate-400">
+                <p>Terminal</p>
               </div>
             )}
           </div>
