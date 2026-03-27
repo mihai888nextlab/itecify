@@ -56,51 +56,63 @@ async function start() {
         },
       },
       startRedirectPath: '/api/auth/google',
-      callbackUri: 'http://localhost:3000/api/auth/google/callback',
+      callbackUri: 'http://localhost:4000/api/auth/google/callback',
     });
 
     fastify.get('/api/auth/google/callback', async (request, reply) => {
-      const { token, refreshToken } = await fastify.google.getAccessTokenFromAuthorizationCodeFlow(request);
+      try {
+        const result = await fastify.google.getAccessTokenFromAuthorizationCodeFlow(request);
+        const token = result.token.access_token;
 
-      // Get user info from Google
-      const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const googleUser = await response.json();
-
-      // Find or create user
-      let user = await fastify.prisma.user.findUnique({
-        where: { email: googleUser.email },
-      });
-
-      if (!user) {
-        user = await fastify.prisma.user.create({
-          data: {
-            email: googleUser.email,
-            name: googleUser.name,
-            avatarUrl: googleUser.picture,
-            provider: 'google',
-            providerId: googleUser.id,
-          },
+        // Get user info from Google
+        const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: `Bearer ${token}` },
         });
+        const googleUser = await response.json();
+
+        console.log('Google user:', googleUser);
+
+        if (!googleUser.email) {
+          return reply.redirect(302, 'http://localhost:3000/auth/login?error=email_required');
+        }
+
+        // Find or create user
+        let user = await fastify.prisma.user.findUnique({
+          where: { email: googleUser.email },
+        });
+
+        if (!user) {
+          user = await fastify.prisma.user.create({
+            data: {
+              email: googleUser.email,
+              name: googleUser.name || googleUser.email.split('@')[0],
+              avatarUrl: googleUser.picture,
+              provider: 'google',
+              providerId: googleUser.id,
+            },
+          });
+        }
+
+        const tokens = fastify.generateTokens({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        });
+
+        reply.setCookie('refreshToken', tokens.refreshToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+
+        // Redirect with token so frontend can store it
+        reply.redirect(302, `http://localhost:3000/auth/callback?token=${tokens.accessToken}&name=${encodeURIComponent(user.name)}`);
+      } catch (error) {
+        fastify.log.error('Google OAuth callback error:', error);
+        reply.redirect(302, 'http://localhost:3000/auth/login?error=oauth_failed');
       }
-
-      const tokens = fastify.generateTokens({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      });
-
-      reply.setCookie('refreshToken', tokens.refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      // Redirect to frontend
-      reply.redirect(302, 'http://localhost:3000/dashboard?welcome=true');
     });
   } else {
     // Placeholder route when OAuth not configured
@@ -130,51 +142,82 @@ async function start() {
         },
       },
       startRedirectPath: '/api/auth/github',
-      callbackUri: 'http://localhost:3000/api/auth/github/callback',
+      callbackUri: 'http://localhost:4000/api/auth/github/callback',
     });
 
     fastify.get('/api/auth/github/callback', async (request, reply) => {
-      const { token, refreshToken } = await fastify.github.getAccessTokenFromAuthorizationCodeFlow(request);
+      try {
+        const result = await fastify.github.getAccessTokenFromAuthorizationCodeFlow(request);
+        const token = result.token.access_token;
 
-      const response = await fetch('https://api.github.com/user', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'User-Agent': 'iTECify',
-        },
-      });
-      const githubUser = await response.json();
-
-      let user = await fastify.prisma.user.findFirst({
-        where: { provider: 'github', providerId: String(githubUser.id) },
-      });
-
-      if (!user) {
-        user = await fastify.prisma.user.create({
-          data: {
-            email: githubUser.email || `github-${githubUser.id}@placeholder.com`,
-            name: githubUser.name || githubUser.login,
-            avatarUrl: githubUser.avatar_url,
-            provider: 'github',
-            providerId: String(githubUser.id),
+        // Get user info from GitHub
+        const response = await fetch('https://api.github.com/user', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'User-Agent': 'iTECify',
           },
         });
+        const githubUser = await response.json();
+
+        // GitHub may not return email, fetch it separately if needed
+        let email = githubUser.email;
+        if (!email) {
+          const emailResponse = await fetch('https://api.github.com/user/emails', {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'User-Agent': 'iTECify',
+            },
+          });
+          const emails = await emailResponse.json();
+          const primaryEmail = emails.find((e: any) => e.primary && e.verified);
+          email = primaryEmail?.email || emails[0]?.email;
+        }
+
+        if (!email) {
+          return reply.redirect(302, 'http://localhost:3000/auth/login?error=email_required');
+        }
+
+        let user = await fastify.prisma.user.findFirst({
+          where: { 
+            OR: [
+              { provider: 'github', providerId: String(githubUser.id) },
+              { email: email }
+            ]
+          },
+        });
+
+        if (!user) {
+          user = await fastify.prisma.user.create({
+            data: {
+              email,
+              name: githubUser.name || githubUser.login,
+              avatarUrl: githubUser.avatar_url,
+              provider: 'github',
+              providerId: String(githubUser.id),
+            },
+          });
+        }
+
+        const tokens = fastify.generateTokens({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        });
+
+        reply.setCookie('refreshToken', tokens.refreshToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+
+        // Redirect with token so frontend can store it
+        reply.redirect(302, `http://localhost:3000/auth/callback?token=${tokens.accessToken}&name=${encodeURIComponent(user.name)}`);
+      } catch (error) {
+        fastify.log.error('GitHub OAuth callback error:', error);
+        reply.redirect(302, 'http://localhost:3000/auth/login?error=oauth_failed');
       }
-
-      const tokens = fastify.generateTokens({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      });
-
-      reply.setCookie('refreshToken', tokens.refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
-
-      reply.redirect(302, 'http://localhost:3000/dashboard?welcome=true');
     });
   }
 

@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:ws": "tsx watch src/y-websocket-server.ts",
+    "dev:all": "npm run dev:ws & npm run dev",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:push": "prisma db push",

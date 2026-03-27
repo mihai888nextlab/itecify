@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { WorkspaceLayout } from '@/components/layout/WorkspaceLayout';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -6,35 +6,37 @@ import { useToast, ToastProvider } from '@/components/ui/Toast';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
+interface UserData {
+  id: string;
+  name: string;
+  email?: string;
+}
+
 function WorkspacePageContent() {
   const router = useRouter();
   const { projectId } = router.query;
   const [isLoading, setIsLoading] = useState(true);
   const [project, setProject] = useState<any>(null);
-  const { setSession, setCurrentUser, setConnected, addUser } = useSessionStore();
+  const [userData, setUserData] = useState<UserData | null>(null);
+  const { setSession, setCurrentUser, setConnected } = useSessionStore();
   const { addToast } = useToast();
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
-    const userData = localStorage.getItem('user');
+    const storedUser = localStorage.getItem('user');
 
-    if (!token || !userData) {
+    if (!token || !storedUser) {
       router.push('/auth/login');
       return;
     }
 
     if (!projectId) return;
 
-    const user = JSON.parse(userData);
+    const user = JSON.parse(storedUser);
+    setUserData(user);
     setCurrentUser({
       id: user.id,
-      name: user.name,
-      color: '#3b82f6',
-      role: 'human',
-    });
-    addUser({
-      id: user.id,
-      name: user.name,
+      name: user.name || 'User',
       color: '#3b82f6',
       role: 'human',
     });
@@ -55,11 +57,8 @@ function WorkspacePageContent() {
       const data = await res.json();
       setProject(data);
       setSession(data.id, data.name);
-
       setConnected(true);
       addToast('success', `Connected to ${data.name}`);
-
-      connectWebSocket(token, data);
     } catch (err: any) {
       addToast('error', err.message);
       router.push('/dashboard');
@@ -67,66 +66,6 @@ function WorkspacePageContent() {
       setIsLoading(false);
     }
   };
-
-  const connectWebSocket = useCallback((token: string, project: any) => {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.hostname}:4000/api/collaborate/ws/${project.id}`;
-
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: 'auth',
-        payload: { token },
-      }));
-    };
-
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      
-      switch (message.type) {
-        case 'sync_initial':
-          console.log('Synced with initial state');
-          break;
-        case 'user_joined':
-          addUser({
-            ...message.payload.user,
-            role: 'human',
-          });
-          addToast('info', `${message.payload.user.name} joined`);
-          break;
-        case 'user_left':
-          useSessionStore.getState().removeUser(message.payload.userId);
-          break;
-        case 'cursor':
-          useSessionStore.getState().updateUserCursor(
-            message.payload.userId,
-            message.payload.position
-          );
-          break;
-        case 'awareness':
-          const existingUser = useSessionStore.getState().users.find(
-            u => u.id === message.payload.userId
-          );
-          if (existingUser) {
-            Object.assign(existingUser, message.payload.user);
-          }
-          break;
-      }
-    };
-
-    ws.onerror = () => {
-      console.log('WebSocket error, running in offline mode');
-    };
-
-    ws.onclose = () => {
-      setConnected(false);
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, [addToast, addUser, setConnected]);
 
   if (isLoading) {
     return (
@@ -139,7 +78,7 @@ function WorkspacePageContent() {
     );
   }
 
-  if (!project) {
+  if (!project || !userData) {
     return (
       <div className="h-screen flex items-center justify-center bg-[#020617]">
         <div className="text-center">
@@ -152,7 +91,17 @@ function WorkspacePageContent() {
     );
   }
 
-  return <WorkspaceLayout sessionId={project.id} />;
+  return (
+    <WorkspaceLayout
+      sessionId={project.id}
+      currentUser={{
+        id: userData.id,
+        name: userData.name || 'User',
+        color: '#3b82f6',
+      }}
+      project={project}
+    />
+  );
 }
 
 export default function WorkspacePage() {

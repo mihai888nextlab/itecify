@@ -1,22 +1,22 @@
 import React, { useState, useCallback } from 'react';
 import { Header } from './Header';
-import { CodeEditor } from '@/components/editor/CodeEditor';
+import { CollaborativeEditor } from '@/components/editor/CollaborativeEditor';
 import { Terminal } from '@/components/terminal/Terminal';
 import { Sidebar, AIAgentsPanel, HistoryPanel, FileTree } from '@/components/sidebar/Sidebar';
-import { useEditorStore } from '@/stores/editorStore';
 import { useSessionStore } from '@/stores/sessionStore';
-import { X, Maximize2, Minimize2, GripVertical, Bot, Zap, Terminal as TerminalIcon } from 'lucide-react';
+import { Maximize2, Minimize2, Zap, Terminal as TerminalIcon } from 'lucide-react';
 
 interface WorkspaceLayoutProps {
   sessionId: string;
+  currentUser: { id: string; name: string; color: string };
+  project: { id: string; name: string; owner: any; members: any[] };
 }
 
-export function WorkspaceLayout({ sessionId }: WorkspaceLayoutProps) {
+export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLayoutProps) {
   const [terminalHeight, setTerminalHeight] = useState(200);
   const [isTerminalCollapsed, setIsTerminalCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [terminalOutput, setTerminalOutput] = useState('');
-  const { activeFileId, openFiles, setActiveFile, closeFile } = useEditorStore();
   const { 
     isExecuting, 
     setExecuting, 
@@ -58,7 +58,7 @@ export function WorkspaceLayout({ sessionId }: WorkspaceLayoutProps) {
       setTerminalOutput(prev => prev + runtimeOutput);
       setExecuting(false);
       
-      const demoBlock = addAIBlock({
+      addAIBlock({
         agentId: 'demo-agent',
         agentName: 'Demo AI',
         content: `// AI-generated optimization suggestion
@@ -195,7 +195,10 @@ try {
 
         <main className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 flex flex-col overflow-hidden">
-            <CodeEditor />
+            <CollaborativeEditor
+              projectId={sessionId}
+              user={currentUser}
+            />
           </div>
 
           <div
