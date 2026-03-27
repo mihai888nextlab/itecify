@@ -88,13 +88,7 @@ export function Terminal({ onCommand, output }: TerminalProps) {
       }
     });
 
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-    });
-    resizeObserver.observe(terminalRef.current);
-
     return () => {
-      resizeObserver.disconnect();
       xterm.dispose();
       xtermRef.current = null;
     };
@@ -112,8 +106,22 @@ export function Terminal({ onCommand, output }: TerminalProps) {
           xtermRef.current?.writeln(line);
         }
       });
+      xtermRef.current?.scrollToBottom();
     }
   }, [output]);
+
+  useEffect(() => {
+    if (!terminalRef.current) return;
+    
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddonRef.current?.fit();
+    });
+    resizeObserver.observe(terminalRef.current);
+    
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
 
   const handleClear = useCallback(() => {
     xtermRef.current?.clear();
