@@ -30,7 +30,10 @@ function WorkspacePageContent() {
       return;
     }
 
-    if (!projectId) return;
+    if (!projectId) {
+      router.push('/dashboard');
+      return;
+    }
 
     const user = JSON.parse(storedUser);
     setUserData(user);
