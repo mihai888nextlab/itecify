@@ -38,30 +38,50 @@ function getYDoc(projectId: string): { doc: Y.Doc; awareness: awarenessProtocol.
 
 async function loadState(projectId: string, doc: Y.Doc) {
   try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    });
+    
+    if (!project) {
+      console.log('Project not found, starting fresh:', projectId);
+      return;
+    }
+    
     const latestState = await prisma.yjsState.findFirst({
       where: { projectId },
       orderBy: { createdAt: 'desc' },
     });
     if (latestState?.data) {
       Y.applyUpdate(doc, Buffer.from(latestState.data));
+      console.log('State loaded for project:', projectId);
+    } else {
+      console.log('No saved state found, starting fresh:', projectId);
     }
-  } catch (error) {
-    console.log('No saved state found for project:', projectId);
+  } catch (error: any) {
+    console.log('Error loading state:', error.message);
   }
 }
 
 async function saveState(projectId: string, doc: Y.Doc) {
   try {
     const state = Y.encodeStateAsUpdate(doc);
-    await prisma.yjsState.create({
-      data: {
-        projectId,
-        data: Buffer.from(state),
-      },
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
     });
-    console.log('State saved for project:', projectId);
-  } catch (error) {
-    console.error('Failed to save state:', error);
+    
+    if (project) {
+      await prisma.yjsState.create({
+        data: {
+          projectId,
+          data: Buffer.from(state),
+        },
+      });
+      console.log('State saved for project:', projectId);
+    } else {
+      console.log('Project not found, skipping state save:', projectId);
+    }
+  } catch (error: any) {
+    console.error('Failed to save state:', error.message);
   }
 }
 
