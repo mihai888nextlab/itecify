@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Component, ErrorInfo, ReactNode } from 'react';
 import { useRouter } from 'next/router';
 import { WorkspaceLayout } from '@/components/layout/WorkspaceLayout';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -12,6 +12,50 @@ interface UserData {
   email?: string;
 }
 
+interface Props {
+  children: ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+  error?: Error;
+}
+
+class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Workspace Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-screen flex items-center justify-center bg-[#020617]">
+          <div className="text-center">
+            <p className="text-red-400 mb-4">Something went wrong</p>
+            <p className="text-slate-400 text-sm mb-4">{this.state.error?.message}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="text-blue-400 hover:underline"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function WorkspacePageContent() {
   const router = useRouter();
   const { id: projectId } = router.query;
@@ -19,23 +63,27 @@ function WorkspacePageContent() {
   const [project, setProject] = useState<any>(null);
   const [userData, setUserData] = useState<UserData | null>(null);
   const { setSession, setCurrentUser, setConnected } = useSessionStore();
-  const { addToast } = useToast();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    console.log('useEffect running, projectId:', projectId);
     const token = localStorage.getItem('accessToken');
     const storedUser = localStorage.getItem('user');
 
     if (!token || !storedUser) {
+      console.log('No token or user, redirecting to login');
       router.push('/auth/login');
       return;
     }
 
     if (!projectId || Array.isArray(projectId)) {
+      console.log('No projectId, redirecting to dashboard');
       router.push('/dashboard');
       return;
     }
 
     const user = JSON.parse(storedUser);
+    console.log('User logged in:', user.name);
     setUserData(user);
     setCurrentUser({
       id: user.id,
@@ -45,7 +93,7 @@ function WorkspacePageContent() {
     });
 
     fetchProject(token);
-  }, [projectId]);
+  }, [projectId, router]);
 
   const fetchProject = async (token: string) => {
     if (!projectId || Array.isArray(projectId)) return;
@@ -65,13 +113,13 @@ function WorkspacePageContent() {
       }
 
       const data = await res.json();
+      console.log('Project data:', data);
       setProject(data);
       setSession(data.id, data.name);
       setConnected(true);
-      addToast('success', `Connected to ${data.name}`);
     } catch (err: any) {
       console.error('Fetch error:', err);
-      addToast('error', err.message);
+      setError(err.message);
     } finally {
       setIsLoading(false);
     }
@@ -83,6 +131,19 @@ function WorkspacePageContent() {
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
           <p className="text-slate-400">Loading workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#020617]">
+        <div className="text-center">
+          <p className="text-red-400 mb-4">{error}</p>
+          <button onClick={() => router.push('/dashboard')} className="text-blue-400 hover:underline">
+            Back to Dashboard
+          </button>
         </div>
       </div>
     );
@@ -116,8 +177,10 @@ function WorkspacePageContent() {
 
 export default function WorkspacePage() {
   return (
-    <ToastProvider>
-      <WorkspacePageContent />
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <WorkspacePageContent />
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }
