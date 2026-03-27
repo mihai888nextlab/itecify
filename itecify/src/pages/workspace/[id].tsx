@@ -51,12 +51,17 @@ function WorkspacePageContent() {
     if (!projectId || Array.isArray(projectId)) return;
     
     try {
+      console.log('Fetching project:', projectId);
       const res = await fetch(`${API_URL}/api/projects/${projectId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
+      console.log('Response status:', res.status);
+
       if (!res.ok) {
-        throw new Error('Failed to fetch project');
+        const errorText = await res.text();
+        console.error('Error response:', errorText);
+        throw new Error(`Failed to fetch project: ${res.status}`);
       }
 
       const data = await res.json();
@@ -65,8 +70,8 @@ function WorkspacePageContent() {
       setConnected(true);
       addToast('success', `Connected to ${data.name}`);
     } catch (err: any) {
+      console.error('Fetch error:', err);
       addToast('error', err.message);
-      router.push('/dashboard');
     } finally {
       setIsLoading(false);
     }

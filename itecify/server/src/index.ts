@@ -16,7 +16,7 @@ async function start() {
 
   // CORS
   await fastify.register(cors, {
-    origin: ['http://localhost:3000', 'http://localhost:3001'],
+    origin: true,
     credentials: true,
   });
 
