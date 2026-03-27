@@ -1,14 +1,11 @@
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view';
-import { EditorState, Extension, StateEffect } from '@codemirror/state';
+import { EditorState, Extension } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
-import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
-import { yCollab } from 'y-codemirror.next';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSessionStore, AIBlock, User } from '@/stores/sessionStore';
 import { Bot, Check, X, ChevronDown, ChevronRight, Move } from 'lucide-react';
@@ -65,7 +62,7 @@ const awarenessTheme = EditorView.theme({
 interface CodeEditorProps {
   projectId: string;
   user: { id: string; name: string; color: string };
-  onReady?: (ytext: Y.Text, provider: WebsocketProvider) => void;
+  onReady?: (ytext: any, provider: any) => void;
 }
 
 function getLanguageExtension(language: string): Extension {
@@ -82,84 +79,99 @@ function getLanguageExtension(language: string): Extension {
 export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const providerRef = useRef<WebsocketProvider | null>(null);
+  const providerRef = useRef<any>(null);
+  const ydocRef = useRef<any>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
+  const [isCollabReady, setIsCollabReady] = useState(false);
   const { aiBlocks, updateAIBlock, removeAIBlock } = useSessionStore();
-
-  const ydoc = useMemo(() => new Y.Doc(), []);
-  const ytext = useMemo(() => ydoc.getText('code'), [ydoc]);
 
   useEffect(() => {
     if (!editorRef.current) return;
 
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234/${projectId}`;
-    
-    const provider = new WebsocketProvider(wsUrl, projectId, ydoc, {
-      connect: true,
-    });
+    let view: EditorView | null = null;
+    let provider: any = null;
+    let ydoc: any = null;
+    let ytext: any = null;
 
-    providerRef.current = provider;
+    const initEditor = async () => {
+      const Y = await import('yjs');
+      const { WebsocketProvider } = await import('y-websocket');
+      const { yCollab } = await import('y-codemirror.next');
 
-    provider.awareness.setLocalStateField('user', {
-      name: user.name,
-      color: user.color,
-    });
+      ydoc = new Y.Doc();
+      ytext = ydoc.getText('code');
+      ydocRef.current = ydoc;
 
-    provider.awareness.on('change', () => {
-      const states = provider.awareness.getStates();
-      const users: User[] = [];
-      states.forEach((state, clientId) => {
-        if (state.user && clientId !== ydoc.clientID) {
-          users.push({
-            id: String(clientId),
-            name: state.user.name || 'Anonymous',
-            color: state.user.color || '#3b82f6',
-            role: 'human',
-            cursorPosition: state.cursor,
-          });
-        }
+      const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234/${projectId}`;
+      
+      provider = new WebsocketProvider(wsUrl, projectId, ydoc, {
+        connect: true,
       });
-      setConnectedUsers(users);
-    });
 
-    provider.on('status', (event: { status: string }) => {
-      console.log('WebSocket status:', event.status);
-    });
+      providerRef.current = provider;
 
-    const extensions: Extension[] = [
-      lineNumbers(),
-      highlightActiveLine(),
-      highlightActiveLineGutter(),
-      history(),
-      foldGutter(),
-      drawSelection(),
-      indentOnInput(),
-      bracketMatching(),
-      closeBrackets(),
-      autocompletion(),
-      syntaxHighlighting(defaultHighlightStyle),
-      oneDark,
-      iTECifyTheme,
-      awarenessTheme,
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-      javascript(),
-      yCollab(ytext, provider.awareness),
-    ];
+      provider.awareness.setLocalStateField('user', {
+        name: user.name,
+        color: user.color,
+      });
 
-    const state = EditorState.create({
-      doc: ytext.toString(),
-      extensions,
-    });
+      provider.awareness.on('change', () => {
+        const states = provider.awareness.getStates();
+        const users: User[] = [];
+        states.forEach((state: any, clientId: number) => {
+          if (state.user && clientId !== ydoc.clientID) {
+            users.push({
+              id: String(clientId),
+              name: state.user.name || 'Anonymous',
+              color: state.user.color || '#3b82f6',
+              role: 'human',
+              cursorPosition: state.cursor,
+            });
+          }
+        });
+        setConnectedUsers(users);
+      });
 
-    const view = new EditorView({
-      state,
-      parent: editorRef.current,
-    });
+      provider.on('status', (event: { status: string }) => {
+        console.log('WebSocket status:', event.status);
+      });
 
-    viewRef.current = view;
+      const extensions: Extension[] = [
+        lineNumbers(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
+        history(),
+        foldGutter(),
+        drawSelection(),
+        indentOnInput(),
+        bracketMatching(),
+        closeBrackets(),
+        autocompletion(),
+        syntaxHighlighting(defaultHighlightStyle),
+        oneDark,
+        iTECifyTheme,
+        awarenessTheme,
+        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+        javascript(),
+        yCollab(ytext, provider.awareness),
+      ];
 
-    if (ytext.length === 0) {
-      ytext.insert(0, `// Welcome to iTECify
+      const state = EditorState.create({
+        doc: ytext.toString(),
+        extensions,
+      });
+
+      if (!editorRef.current) return;
+
+      view = new EditorView({
+        state,
+        parent: editorRef.current,
+      });
+
+      viewRef.current = view;
+
+      if (ytext.length === 0) {
+        ytext.insert(0, `// Welcome to iTECify
 // Start coding together!
 
 function greet(name) {
@@ -168,16 +180,29 @@ function greet(name) {
 
 greet('iTEC 2026');
 `);
-    }
+      }
 
-    onReady?.(ytext, provider);
+      setIsCollabReady(true);
+      onReady?.(ytext, provider);
+    };
+
+    initEditor();
 
     return () => {
-      view.destroy();
-      provider.destroy();
-      ydoc.destroy();
+      if (viewRef.current) {
+        viewRef.current.destroy();
+        viewRef.current = null;
+      }
+      if (providerRef.current) {
+        providerRef.current.destroy();
+        providerRef.current = null;
+      }
+      if (ydocRef.current) {
+        ydocRef.current.destroy();
+        ydocRef.current = null;
+      }
     };
-  }, [projectId, ydoc, ytext, user, onReady]);
+  }, [projectId, user, onReady]);
 
   const handleAcceptBlock = useCallback((blockId: string) => {
     updateAIBlock(blockId, { status: 'accepted' });
@@ -193,6 +218,14 @@ greet('iTEC 2026');
     <div className="relative h-full flex flex-col bg-[#020617]">
       <div className="flex-1 overflow-hidden relative">
         <div ref={editorRef} className="h-full" />
+        {!isCollabReady && (
+          <div className="absolute inset-0 flex items-center justify-center bg-[#020617]">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-slate-400 text-sm">Initializing collaborative editor...</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {pendingBlocks.length > 0 && (
