@@ -46,20 +46,8 @@ function LoginContent() {
     }
   };
 
-  const handleOAuth = async (provider: string) => {
-    try {
-      const res = await fetch(`${API_URL}/api/auth/${provider}`);
-      const data = await res.json();
-      
-      if (!res.ok) {
-        addToast('warning', data.message || 'OAuth not configured');
-        return;
-      }
-      
-      window.location.href = `${API_URL}/api/auth/${provider}`;
-    } catch {
-      addToast('error', 'Failed to check OAuth status');
-    }
+  const handleOAuth = (provider: string) => {
+    window.location.href = `${API_URL}/api/auth/${provider}`;
   };
 
   return (
