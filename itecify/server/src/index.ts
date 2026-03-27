@@ -102,6 +102,14 @@ async function start() {
       // Redirect to frontend
       reply.redirect(302, 'http://localhost:3000/dashboard?welcome=true');
     });
+  } else {
+    // Placeholder route when OAuth not configured
+    fastify.get('/api/auth/github', async (request, reply) => {
+      return reply.code(501).send({ 
+        error: 'OAuth not configured',
+        message: 'GitHub OAuth requires GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env file'
+      });
+    });
   }
 
   // GitHub OAuth
