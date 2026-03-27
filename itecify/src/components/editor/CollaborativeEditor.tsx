@@ -102,7 +102,7 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
       ytext = ydoc.getText('code');
       ydocRef.current = ydoc;
 
-      const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234/${projectId}`;
+      const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234`;
       
       provider = new WebsocketProvider(wsUrl, projectId, ydoc, {
         connect: true,
