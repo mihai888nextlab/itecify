@@ -154,6 +154,8 @@ function WorkspacePageContent() {
       <div className="h-screen flex items-center justify-center bg-[#020617]">
         <div className="text-center">
           <p className="text-slate-400 mb-4">Project not found</p>
+          <p className="text-slate-500 text-sm">project: {JSON.stringify(project)}</p>
+          <p className="text-slate-500 text-sm">userData: {JSON.stringify(userData)}</p>
           <button onClick={() => router.push('/dashboard')} className="text-blue-400 hover:underline">
             Back to Dashboard
           </button>
@@ -162,16 +164,20 @@ function WorkspacePageContent() {
     );
   }
 
+  console.log('Rendering WorkspaceLayout with:', { projectId: project.id, userId: userData.id });
+  
   return (
-    <WorkspaceLayout
-      sessionId={project.id}
-      currentUser={{
-        id: userData.id,
-        name: userData.name || 'User',
-        color: '#3b82f6',
-      }}
-      project={project}
-    />
+    <ErrorBoundary>
+      <WorkspaceLayout
+        sessionId={project.id}
+        currentUser={{
+          id: userData.id,
+          name: userData.name || 'User',
+          color: '#3b82f6',
+        }}
+        project={project}
+      />
+    </ErrorBoundary>
   );
 }
 
