@@ -6,6 +6,8 @@ import { Sidebar, AIAgentsPanel, HistoryPanel, FileTree } from '@/components/sid
 import { useSessionStore } from '@/stores/sessionStore';
 import { Maximize2, Minimize2, Zap, Terminal as TerminalIcon } from 'lucide-react';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
 interface WorkspaceLayoutProps {
   sessionId: string;
   currentUser: { id: string; name: string; color: string };
@@ -22,11 +24,13 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     setExecuting, 
     settings,
     addAIBlock,
-    aiBlocks
+    aiBlocks,
+    currentCode
   } = useSessionStore();
 
   const handleRun = useCallback(async () => {
     setExecuting(true);
+    setIsTerminalCollapsed(false);
     setTerminalOutput('');
     
     const outputLines = [
@@ -35,47 +39,60 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
       '\x1b[1;32m  Executing code...\x1b[0m',
       '\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m',
       '',
-      `[${new Date().toLocaleTimeString()}] Building container...`,
       `[${new Date().toLocaleTimeString()}] Language: ${settings.language}`,
-      `[${new Date().toLocaleTimeString()}] Memory limit: ${settings.memoryLimit}`,
       '',
     ];
     
     setTerminalOutput(outputLines.join('\n'));
     
-    setTimeout(() => {
-      const runtimeOutput = [
-        '',
-        '\x1b[32m✓ Container started successfully\x1b[0m',
-        '',
-        '> Hello, iTEC 2026!',
-        '',
-        '\x1b[33m⚠ Execution completed in 142ms\x1b[0m',
-        '\x1b[90mMemory used: 12.4MB / 512MB\x1b[0m',
-        '',
-      ].join('\n');
-      
-      setTerminalOutput(prev => prev + runtimeOutput);
-      setExecuting(false);
-      
-      addAIBlock({
-        agentId: 'demo-agent',
-        agentName: 'Demo AI',
-        content: `// AI-generated optimization suggestion
-function optimizedGreeter(name) {
-  return \`Hello, \${name}! Welcome to iTECify!\`;
-}
-
-// This function uses template literals
-// for better performance
-console.log(optimizedGreeter('iTEC 2026'));`,
-        status: 'pending',
-        startLine: 10,
-        endLine: 17,
+    try {
+      const token = localStorage.getItem('accessToken');
+      const res = await fetch(`${API_URL}/api/execute/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          code: currentCode || 'console.log("No code to execute");',
+          language: settings.language,
+        }),
       });
       
-    }, 1500);
-  }, [settings, setExecuting, addAIBlock]);
+      const result = await res.json();
+      
+      let output = '';
+      if (result.success) {
+        output = [
+          '\x1b[32m✓ Execution successful\x1b[0m',
+          '',
+          result.stdout || '(no output)',
+          '',
+        ].join('\n');
+        
+        if (result.stderr) {
+          output += [
+            '\x1b[33m⚠ Warnings:\x1b[0m',
+            result.stderr,
+            '',
+          ].join('\n');
+        }
+      } else {
+        output = [
+          '\x1b[31m✗ Execution failed\x1b[0m',
+          '',
+          result.error || result.stderr || 'Unknown error',
+          '',
+        ].join('\n');
+      }
+      
+      setTerminalOutput(prev => prev + output);
+    } catch (err: any) {
+      setTerminalOutput(prev => prev + `\n\x1b[31m✗ Error: ${err.message}\x1b[0m\n`);
+    } finally {
+      setExecuting(false);
+    }
+  }, [settings.language, currentCode, setExecuting]);
 
   const handleStop = useCallback(() => {
     setExecuting(false);

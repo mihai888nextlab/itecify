@@ -83,7 +83,7 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
   const ydocRef = useRef<any>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
   const [isCollabReady, setIsCollabReady] = useState(false);
-  const { aiBlocks, updateAIBlock, removeAIBlock } = useSessionStore();
+  const { aiBlocks, updateAIBlock, removeAIBlock, setCurrentCode } = useSessionStore();
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -140,6 +140,10 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
         console.log('WebSocket status:', event.status);
       });
 
+      ytext.observe(() => {
+        setCurrentCode(ytext.toString());
+      });
+
       const extensions: Extension[] = [
         lineNumbers(),
         highlightActiveLine(),
@@ -174,8 +178,9 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
 
       viewRef.current = view;
 
-      if (ytext.length === 0) {
-        ytext.insert(0, `// Welcome to iTECify
+      provider.on('synced', () => {
+        if (ytext.length === 0) {
+          ytext.insert(0, `// Welcome to iTECify
 // Start coding together!
 
 function greet(name) {
@@ -184,10 +189,15 @@ function greet(name) {
 
 greet('iTEC 2026');
 `);
-      }
+        }
+        setIsCollabReady(true);
+        onReady?.(ytext, provider);
+      });
 
-      setIsCollabReady(true);
-      onReady?.(ytext, provider);
+      if (ytext.length > 0) {
+        setIsCollabReady(true);
+        onReady?.(ytext, provider);
+      }
     };
 
     initEditor();

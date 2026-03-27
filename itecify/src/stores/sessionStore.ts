@@ -38,6 +38,7 @@ interface SessionState {
   isConnected: boolean;
   isExecuting: boolean;
   containerStatus: 'stopped' | 'running' | 'error' | null;
+  currentCode: string;
   
   setSession: (id: string, name: string) => void;
   setCurrentUser: (user: User) => void;
@@ -51,6 +52,7 @@ interface SessionState {
   setConnected: (connected: boolean) => void;
   setExecuting: (executing: boolean) => void;
   setContainerStatus: (status: 'stopped' | 'running' | 'error' | null) => void;
+  setCurrentCode: (code: string) => void;
   reset: () => void;
 }
 
@@ -76,6 +78,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isConnected: false,
   isExecuting: false,
   containerStatus: null,
+  currentCode: '',
 
   setSession: (id, name) => set({ sessionId: id, sessionName: name }),
 
@@ -141,6 +144,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setContainerStatus: (status) => set({ containerStatus: status }),
 
+  setCurrentCode: (code) => set({ currentCode: code }),
+
   reset: () => set({
     sessionId: null,
     sessionName: 'Untitled Session',
@@ -151,6 +156,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     isConnected: false,
     isExecuting: false,
     containerStatus: null,
+    currentCode: '',
   }),
 }));
 
