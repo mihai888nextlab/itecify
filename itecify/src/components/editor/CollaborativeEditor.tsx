@@ -8,6 +8,7 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSessionStore, AIBlock, User } from '@/stores/sessionStore';
+import { useEditorStore, FileNode } from '@/stores/editorStore';
 import { Bot, Check, X, ChevronDown, ChevronRight, Move } from 'lucide-react';
 
 const iTECifyTheme = EditorView.theme({
@@ -62,7 +63,6 @@ const awarenessTheme = EditorView.theme({
 interface CodeEditorProps {
   projectId: string;
   user: { id: string; name: string; color: string };
-  onReady?: (ytext: any, provider: any) => void;
 }
 
 function getLanguageExtension(language: string): Extension {
@@ -76,14 +76,29 @@ function getLanguageExtension(language: string): Extension {
   }
 }
 
-export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
+export function CodeEditor({ projectId, user }: CodeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const providerRef = useRef<any>(null);
   const ydocRef = useRef<any>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
   const [isCollabReady, setIsCollabReady] = useState(false);
-  const { aiBlocks, updateAIBlock, removeAIBlock, setCurrentCode } = useSessionStore();
+  const { aiBlocks, updateAIBlock, removeAIBlock } = useSessionStore();
+  const { activeFileId, files, updateFileContent, openFile } = useEditorStore();
+
+  const currentFile = useMemo(() => {
+    const findFile = (nodes: FileNode[], id: string): FileNode | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node;
+        if (node.children) {
+          const found = findFile(node.children, id);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return findFile(files, activeFileId || '') || null;
+  }, [files, activeFileId]);
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -91,7 +106,9 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
     let view: EditorView | null = null;
     let provider: any = null;
     let ydoc: any = null;
-    let ytext: any = null;
+    let ytextMap = new Map<string, any>();
+    let yFilesMap: any = null;
+    let isLocalChange = false;
 
     const initEditor = async () => {
       const Y = await import('yjs');
@@ -99,8 +116,57 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
       const { yCollab } = await import('y-codemirror.next');
 
       ydoc = new Y.Doc();
-      ytext = ydoc.getText('code');
       ydocRef.current = ydoc;
+
+      yFilesMap = ydoc.getMap('files');
+
+      yFilesMap.observe((event: any) => {
+        if (isLocalChange) return;
+
+        const editorStore = useEditorStore.getState();
+        const newFiles: FileNode[] = [];
+
+        yFilesMap.forEach((value: any, key: string) => {
+          if (key === '_meta') return;
+          if (value === null) return;
+          const fileData = typeof value === 'string' ? JSON.parse(value) : value;
+          newFiles.push(fileData);
+        });
+
+        if (event.changes.keys) {
+          const deletedKeys: string[] = [];
+          event.changes.keys.forEach((change: any, key: string) => {
+            if (change.action === 'delete' && key !== '_meta') {
+              deletedKeys.push(key);
+            }
+          });
+          
+          if (deletedKeys.length > 0) {
+            const idsToRemove = new Set<string>();
+            const collectIds = (fileId: string) => {
+              idsToRemove.add(fileId);
+              const file = editorStore.files.find(f => f.id === fileId);
+              if (file?.children) {
+                file.children.forEach((child: FileNode) => collectIds(child.id));
+              }
+            };
+            deletedKeys.forEach(collectIds);
+            
+            const filteredFiles = removeFilesFromTree(editorStore.files, idsToRemove);
+            useEditorStore.setState({ files: filteredFiles });
+            return;
+          }
+        }
+
+        const needsUpdate = newFiles.length !== editorStore.files.length || 
+          !newFiles.every(f => editorStore.files.some(lf => lf.id === f.id));
+
+        if (needsUpdate) {
+          const currentFiles = editorStore.files;
+          const mergedFiles = mergeFiles(currentFiles, newFiles);
+          useEditorStore.setState({ files: mergedFiles });
+        }
+      });
 
       const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234`;
       
@@ -117,10 +183,9 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
 
       provider.awareness.on('change', () => {
         const states = provider.awareness.getStates();
-        const localClientId = ydoc.clientID;
         const users: User[] = [];
         states.forEach((state: any, clientId: number) => {
-          if (state.user && clientId !== localClientId) {
+          if (state.user && clientId !== ydoc.clientID) {
             const existing = users.find(u => u.name === state.user.name);
             if (!existing) {
               users.push({
@@ -136,40 +201,143 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
         setConnectedUsers(users);
       });
 
-      provider.on('status', (event: { status: string }) => {
-        console.log('WebSocket status:', event.status);
-      });
+      const syncFilesToYjs = () => {
+        const editorFiles = useEditorStore.getState().files;
+        const currentIds = new Set<string>();
+        
+        editorFiles.forEach(file => {
+          syncFileToYjs(file, yFilesMap);
+          collectIds(file, currentIds);
+        });
+        
+        yFilesMap.forEach((value: any, key: string) => {
+          if (key !== '_meta' && !currentIds.has(key)) {
+            isLocalChange = true;
+            yFilesMap.delete(key);
+            isLocalChange = false;
+          }
+        });
+      };
 
-      ytext.observe(() => {
-        setCurrentCode(ytext.toString());
-      });
+      const collectIds = (file: FileNode, ids: Set<string>) => {
+        ids.add(file.id);
+        if (file.children) {
+          file.children.forEach((child: FileNode) => collectIds(child, ids));
+        }
+      };
 
-      const extensions: Extension[] = [
-        lineNumbers(),
-        highlightActiveLine(),
-        highlightActiveLineGutter(),
-        history(),
-        foldGutter(),
-        drawSelection(),
-        indentOnInput(),
-        bracketMatching(),
-        closeBrackets(),
-        autocompletion(),
-        syntaxHighlighting(defaultHighlightStyle),
-        oneDark,
-        iTECifyTheme,
-        awarenessTheme,
-        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-        javascript(),
-        yCollab(ytext, provider.awareness),
-      ];
+      const syncFileToYjs = (file: FileNode, yMap: any) => {
+        const existing = yMap.get(file.id);
+        if (!existing || JSON.stringify(existing) !== JSON.stringify(file)) {
+          isLocalChange = true;
+          yMap.set(file.id, file);
+          isLocalChange = false;
+        }
+        if (file.children) {
+          file.children.forEach((child: FileNode) => syncFileToYjs(child, yMap));
+        }
+      };
 
-      const state = EditorState.create({
-        doc: ytext.toString(),
-        extensions,
-      });
+      const unsubscribe = useEditorStore.subscribe(
+        (state, prevState) => {
+          if (state.files !== prevState.files) {
+            syncFilesToYjs();
+          }
+        }
+      );
+
+      const createExtensions = (fileId: string) => {
+        let ytext = ytextMap.get(fileId);
+        if (!ytext) {
+          ytext = ydoc.getText(`file:${fileId}`);
+          ytextMap.set(fileId, ytext);
+        }
+        
+        const updateListener = EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            const newContent = update.state.doc.toString();
+            updateFileContent(fileId, newContent);
+          }
+        });
+        
+        const file = (() => {
+          const find = (nodes: FileNode[], id: string): FileNode | null => {
+            for (const n of nodes) {
+              if (n.id === id) return n;
+              if (n.children) {
+                const f = find(n.children, id);
+                if (f) return f;
+              }
+            }
+            return null;
+          };
+          return find(useEditorStore.getState().files, fileId);
+        })();
+        
+        return [
+          lineNumbers(),
+          highlightActiveLine(),
+          highlightActiveLineGutter(),
+          history(),
+          foldGutter(),
+          drawSelection(),
+          indentOnInput(),
+          bracketMatching(),
+          closeBrackets(),
+          autocompletion(),
+          syntaxHighlighting(defaultHighlightStyle),
+          oneDark,
+          iTECifyTheme,
+          awarenessTheme,
+          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          file?.language === 'python' ? python() : javascript({ typescript: file?.language === 'typescript' }),
+          yCollab(ytext, provider.awareness),
+          updateListener,
+        ];
+      };
+
+      const activeFile = useEditorStore.getState().activeFileId;
+      const initialFileId = activeFile || 'index';
+      let initialYText = ytextMap.get(initialFileId);
+      
+      const findFileContent = (nodes: FileNode[], id: string): string | null => {
+        for (const n of nodes) {
+          if (n.id === id) return n.content || null;
+          if (n.children) {
+            const f = findFileContent(n.children, id);
+            if (f !== null) return f;
+          }
+        }
+        return null;
+      };
+      
+      if (!initialYText) {
+        initialYText = ydoc.getText(`file:${initialFileId}`);
+        ytextMap.set(initialFileId, initialYText);
+        
+        if (initialYText.length === 0) {
+          const storedContent = findFileContent(useEditorStore.getState().files, initialFileId);
+          if (!storedContent) {
+            const defaultContent = `// Welcome to iTECify
+// Start coding together!
+
+function greet(name) {
+  console.log(\`Hello, \${name}!\`);
+}
+
+greet('iTEC 2026');
+`;
+            initialYText.insert(0, defaultContent);
+          }
+        }
+      }
 
       if (!editorRef.current) return;
+
+      const state = EditorState.create({
+        doc: initialYText.toString(),
+        extensions: createExtensions(initialFileId),
+      });
 
       view = new EditorView({
         state,
@@ -179,30 +347,85 @@ export function CodeEditor({ projectId, user, onReady }: CodeEditorProps) {
       viewRef.current = view;
 
       provider.on('synced', () => {
-        if (ytext.length === 0) {
-          ytext.insert(0, `// Welcome to iTECify
-// Start coding together!
-
-function greet(name) {
-  console.log(\`Hello, \${name}!\`);
-}
-
-greet('iTEC 2026');
-`);
-        }
         setIsCollabReady(true);
-        onReady?.(ytext, provider);
+        
+        const editorFiles = useEditorStore.getState().files;
+        yFilesMap.forEach((value: any, key: string) => {
+          if (key === '_meta') return;
+          const fileData = typeof value === 'string' ? JSON.parse(value) : value;
+          const existsLocally = editorFiles.some(f => f.id === fileData.id);
+          if (!existsLocally) {
+            useEditorStore.getState().addFile({
+              name: fileData.name,
+              type: fileData.type,
+              language: fileData.language,
+              content: fileData.content || '',
+            });
+          }
+        });
       });
 
-      if (ytext.length > 0) {
+      if (initialYText.length > 0) {
         setIsCollabReady(true);
-        onReady?.(ytext, provider);
       }
+
+      let currentFileId = initialFileId;
+
+      const unsubscribeFileChange = useEditorStore.subscribe(
+        (state, prevState) => {
+          if (state.activeFileId !== prevState.activeFileId && state.activeFileId) {
+            const newFileId = state.activeFileId;
+            
+            let newYText = ytextMap.get(newFileId);
+            if (!newYText) {
+              newYText = ydoc.getText(`file:${newFileId}`);
+              ytextMap.set(newFileId, newYText);
+              
+              if (newYText.length === 0) {
+                const file = (() => {
+                  const find = (nodes: FileNode[], id: string): FileNode | null => {
+                    for (const n of nodes) {
+                      if (n.id === id) return n;
+                      if (n.children) {
+                        const f = find(n.children, id);
+                        if (f) return f;
+                      }
+                    }
+                    return null;
+                  };
+                  return find(state.files, newFileId);
+                })();
+                if (file?.content) {
+                  newYText.insert(0, file.content);
+                }
+              }
+            }
+
+            currentFileId = newFileId;
+
+            view?.setState(
+              EditorState.create({
+                doc: newYText.toString(),
+                extensions: createExtensions(newFileId),
+              })
+            );
+          }
+        }
+      );
+
+      return () => {
+        unsubscribe();
+        unsubscribeFileChange();
+        view?.destroy();
+        provider?.destroy();
+        ydoc?.destroy();
+      };
     };
 
-    initEditor();
+    const cleanup = initEditor();
 
     return () => {
+      cleanup.then(fn => fn?.());
       if (viewRef.current) {
         viewRef.current.destroy();
         viewRef.current = null;
@@ -216,7 +439,7 @@ greet('iTEC 2026');
         ydocRef.current = null;
       }
     };
-  }, [projectId, user, onReady]);
+  }, [projectId, user]);
 
   const handleAcceptBlock = useCallback((blockId: string) => {
     updateAIBlock(blockId, { status: 'accepted' });
@@ -264,6 +487,43 @@ greet('iTEC 2026');
       </div>
     </div>
   );
+}
+
+function mergeFiles(localFiles: FileNode[], remoteFiles: FileNode[]): FileNode[] {
+  const result = [...localFiles];
+  
+  for (const remoteFile of remoteFiles) {
+    const exists = result.some(f => f.id === remoteFile.id);
+    if (!exists) {
+      result.push(remoteFile);
+    } else {
+      const index = result.findIndex(f => f.id === remoteFile.id);
+      if (remoteFile.type === 'folder' && result[index].children) {
+        result[index] = {
+          ...remoteFile,
+          children: mergeFiles(result[index].children || [], remoteFile.children || []),
+        };
+      } else {
+        result[index] = remoteFile;
+      }
+    }
+  }
+  
+  return result;
+}
+
+function removeFilesFromTree(files: FileNode[], idsToRemove: Set<string>): FileNode[] {
+  return files
+    .filter(file => !idsToRemove.has(file.id))
+    .map(file => {
+      if (file.children) {
+        return {
+          ...file,
+          children: removeFilesFromTree(file.children, idsToRemove),
+        };
+      }
+      return file;
+    });
 }
 
 function AIBlocksOverlay({ blocks, onAccept, onReject }: { blocks: AIBlock[]; onAccept: (id: string) => void; onReject: (id: string) => void }) {

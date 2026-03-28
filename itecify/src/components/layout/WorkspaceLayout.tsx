@@ -4,7 +4,8 @@ import { CollaborativeEditor } from '@/components/editor/CollaborativeEditor';
 import { Terminal } from '@/components/terminal/Terminal';
 import { Sidebar, AIAgentsPanel, HistoryPanel, FileTree } from '@/components/sidebar/Sidebar';
 import { useSessionStore } from '@/stores/sessionStore';
-import { Maximize2, Minimize2, Zap, Terminal as TerminalIcon } from 'lucide-react';
+import { useEditorStore } from '@/stores/editorStore';
+import { Maximize2, Minimize2, Zap, Terminal as TerminalIcon, X, FileCode } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -24,11 +25,37 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     setExecuting, 
     settings,
     addAIBlock,
-    aiBlocks,
-    currentCode
+    aiBlocks
   } = useSessionStore();
+  const { activeFileId, files } = useEditorStore();
+
+  const findFileInTree = (nodes: any[], id: string): any => {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      if (node.children) {
+        const found = findFileInTree(node.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
 
   const handleRun = useCallback(async () => {
+    if (!activeFileId) {
+      setTerminalOutput(`\x1b[33m⚠ No file selected to execute\x1b[0m\n`);
+      return;
+    }
+    
+    const activeFile = findFileInTree(files, activeFileId);
+    
+    if (!activeFile || activeFile.type === 'folder') {
+      setTerminalOutput(`\x1b[33m⚠ No file selected to execute\x1b[0m\n`);
+      return;
+    }
+
+    const codeToRun = activeFile.content || '';
+    const language = activeFile.language || settings.language;
+
     setExecuting(true);
     setIsTerminalCollapsed(false);
     setTerminalOutput('');
@@ -36,10 +63,10 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     const outputLines = [
       '',
       '\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m',
-      '\x1b[1;32m  Executing code...\x1b[0m',
+      `\x1b[1;32m  Executing: ${activeFile.name}\x1b[0m`,
       '\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m',
       '',
-      `[${new Date().toLocaleTimeString()}] Language: ${settings.language}`,
+      `[${new Date().toLocaleTimeString()}] Language: ${language}`,
       '',
     ];
     
@@ -54,8 +81,8 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          code: currentCode || 'console.log("No code to execute");',
-          language: settings.language,
+          code: codeToRun,
+          language: language,
         }),
       });
       
@@ -92,7 +119,7 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     } finally {
       setExecuting(false);
     }
-  }, [settings.language, currentCode, setExecuting]);
+  }, [files, activeFileId, settings, setExecuting]);
 
   const handleStop = useCallback(() => {
     setExecuting(false);
@@ -211,6 +238,7 @@ try {
         </aside>
 
         <main className="flex-1 flex flex-col overflow-hidden">
+          <EditorTabs />
           <div className="flex-1 flex flex-col overflow-hidden">
             <CollaborativeEditor
               projectId={sessionId}
@@ -257,6 +285,54 @@ try {
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+function findFileInTree(files: any[], id: string): any {
+  for (const file of files) {
+    if (file.id === id) return file;
+    if (file.children) {
+      const found = findFileInTree(file.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function EditorTabs() {
+  const { openFiles, activeFileId, files, setActiveFile, closeFile } = useEditorStore();
+
+  return (
+    <div className="flex items-center bg-[#1e1e1e] border-b border-slate-700 overflow-x-auto">
+      {openFiles.map(fileId => {
+        const file = findFileInTree(files, fileId);
+        const isActive = fileId === activeFileId;
+        return (
+          <div
+            key={fileId}
+            className={`flex items-center gap-2 px-4 py-2 text-sm cursor-pointer border-r border-slate-700 transition group ${
+              isActive ? 'bg-[#252526] text-white' : 'bg-[#1e1e1e] text-slate-400 hover:bg-slate-800'
+            }`}
+            onClick={() => setActiveFile(fileId)}
+          >
+            <FileCode size={14} className="text-yellow-400" />
+            <span>{file?.name || 'Unknown'}</span>
+            <button
+              className="p-0.5 hover:bg-slate-600 rounded transition opacity-0 group-hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeFile(fileId);
+              }}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        );
+      })}
+      {openFiles.length === 0 && (
+        <div className="px-4 py-2 text-sm text-slate-500">No files open</div>
+      )}
     </div>
   );
 }
