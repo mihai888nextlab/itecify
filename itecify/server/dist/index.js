@@ -9,6 +9,7 @@ import projectRoutes from './routes/projects.js';
 import collaborationRoutes from './routes/collaboration.js';
 import executionRoutes from './routes/execution.js';
 import aiRoutes from './routes/ai.js';
+import terminalRoutes from './routes/terminal.js';
 async function start() {
     const fastify = Fastify({
         logger: true,
@@ -34,6 +35,7 @@ async function start() {
     await fastify.register(collaborationRoutes, { prefix: '/api/collaborate' });
     await fastify.register(executionRoutes, { prefix: '/api/execute' });
     await fastify.register(aiRoutes, { prefix: '/api/ai' });
+    await fastify.register(terminalRoutes, { prefix: '/api/terminal' });
     // Google OAuth
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         await fastify.register(oauth, {

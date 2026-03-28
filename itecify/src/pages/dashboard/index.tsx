@@ -27,7 +27,20 @@ function DashboardContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newProject, setNewProject] = useState({ name: '', description: '' });
+  const [newProject, setNewProject] = useState({ 
+    name: '', 
+    description: '',
+    containerImage: 'node:20'
+  });
+
+  const containerImages = [
+    { id: 'node:20', name: 'Node.js 20', description: 'Latest Node.js LTS' },
+    { id: 'node:18', name: 'Node.js 18', description: 'Node.js 18 LTS' },
+    { id: 'python:3.12', name: 'Python 3.12', description: 'Latest Python' },
+    { id: 'python:3.11', name: 'Python 3.11', description: 'Python 3.11' },
+    { id: 'ubuntu:22.04', name: 'Ubuntu 22.04', description: 'Ubuntu with full tools' },
+    { id: 'golang:1.22', name: 'Go 1.22', description: 'Go programming language' },
+  ];
 
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
@@ -81,7 +94,7 @@ function DashboardContent() {
       const project = await res.json();
       setProjects([project, ...projects]);
       setShowCreateModal(false);
-      setNewProject({ name: '', description: '' });
+      setNewProject({ name: '', description: '', containerImage: 'node:20' });
       addToast('success', 'Project created!');
     } catch (err: any) {
       addToast('error', err.message);
@@ -266,6 +279,21 @@ function DashboardContent() {
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none h-24"
                   placeholder="A brief description of your project..."
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Runtime Environment</label>
+                <select
+                  value={newProject.containerImage}
+                  onChange={(e) => setNewProject({ ...newProject, containerImage: e.target.value })}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {containerImages.map(img => (
+                    <option key={img.id} value={img.id}>
+                      {img.name} - {img.description}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">Docker container for running your code</p>
               </div>
               <div className="flex gap-3 pt-2">
                 <Button type="button" variant="secondary" className="flex-1" onClick={() => setShowCreateModal(false)}>

@@ -415,6 +415,63 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     return null;
   };
 
+  // Helper to get language from filename
+  const getLanguageFromFileName = (name: string): string => {
+    const ext = name.split('.').pop()?.toLowerCase();
+    const langMap: Record<string, string> = {
+      js: 'javascript',
+      jsx: 'javascript',
+      ts: 'typescript',
+      tsx: 'typescript',
+      py: 'python',
+      rb: 'ruby',
+      go: 'go',
+      rs: 'rust',
+      java: 'java',
+      cpp: 'cpp',
+      c: 'c',
+      html: 'html',
+      css: 'css',
+      json: 'json',
+      md: 'markdown',
+      yaml: 'yaml',
+      yml: 'yaml',
+      sh: 'shell',
+      bash: 'shell',
+    };
+    return langMap[ext || ''] || 'javascript';
+  };
+
+  // Listen for container files synced event
+  React.useEffect(() => {
+    const handleContainerFilesSynced = (event: CustomEvent) => {
+      const containerFiles = event.detail as { name: string; content: string; path: string }[];
+      
+      // Add or update files in the editor store
+      containerFiles.forEach(containerFile => {
+        // Check if file already exists by name
+        const existingFile = files.find(f => f.name === containerFile.name);
+        
+        if (!existingFile) {
+          // Add new file
+          const language = getLanguageFromFileName(containerFile.name);
+          addFile({
+            name: containerFile.name,
+            type: 'file',
+            language,
+            content: containerFile.content,
+          }, undefined, sessionId);
+        } else if (existingFile.content !== containerFile.content) {
+          // Update existing file content
+          updateFileContent(existingFile.id, containerFile.content);
+        }
+      });
+    };
+    
+    window.addEventListener('container-files-synced', handleContainerFilesSynced as EventListener);
+    return () => window.removeEventListener('container-files-synced', handleContainerFilesSynced as EventListener);
+  }, [files, sessionId, addFile, updateFileContent]);
+
   const getAllFiles = (nodes: any[]): any[] => {
     const result: any[] = [];
     for (const node of nodes) {
@@ -450,40 +507,92 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     const codeToRun = activeFile.content || '';
     const language = activeFile.language || settings.language;
 
+    // Determine the command based on language
+    const runCommand = language === 'python' ? `python ${activeFile.name}` : `node ${activeFile.name}`;
+
     setExecuting(true);
     setIsTerminalCollapsed(false);
     addTermLine('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    addTermLine('ok', `  Executing: ${activeFile.name}`);
+    addTermLine('ok', `  Running: ${activeFile.name}`);
     addTermLine('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     addTermLine('info', `[${new Date().toLocaleTimeString()}] Language: ${language}`);
+    addTermLine('info', 'Syncing files to container...');
     
     try {
-      const token = localStorage.getItem('accessToken');
-      const res = await fetch(`${API_URL}/api/execute/execute`, {
+      const token = localStorage.getItem('accessToken') || '';
+      
+      if (!sessionId) {
+        addTermLine('err', 'No project context');
+        setExecuting(false);
+        return;
+      }
+      
+      const allFiles = getAllFiles(files);
+      
+      // Use Docker execute endpoint instead of server-side execution
+      const res = await fetch(`${API_URL}/api/terminal/execute`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           ...(token && { 'Authorization': `Bearer ${token}` })
         },
-        body: JSON.stringify({ code: codeToRun, language }),
+        body: JSON.stringify({ 
+          command: runCommand,
+          projectId: sessionId,
+          files: allFiles.map(f => ({ name: f.name, content: f.content || '' })),
+        }),
       });
       
       const result = await res.json();
       
       if (result.success) {
-        addTermLine('ok', '✓ Execution successful');
-        if (result.stdout) addTermLine('out', result.stdout);
+        if (result.stdout) {
+          result.stdout.split('\n').forEach((line: string) => {
+            addTermLine('out', line);
+          });
+        }
+        if (result.stderr) {
+          result.stderr.split('\n').forEach((line: string) => {
+            addTermLine('err', line);
+          });
+        }
+        addTermLine('ok', '✓ Execution completed');
       } else {
-        addTermLine('err', `✗ ${result.error || 'Execution failed'}`);
-        if (result.details) addTermLine('err', result.details);
+        addTermLine('err', result.error || 'Execution failed');
+        if (result.stderr) {
+          result.stderr.split('\n').forEach((line: string) => {
+            addTermLine('err', line);
+          });
+        }
+      }
+
+      // Sync files from Docker container back to browser
+      addTermLine('info', 'Syncing files from container...');
+      try {
+        const syncRes = await fetch(`${API_URL}/api/terminal/sync-from-container`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token && { 'Authorization': `Bearer ${token}` })
+          },
+          body: JSON.stringify({ projectId: sessionId }),
+        });
+        
+        const syncResult = await syncRes.json();
+        
+        if (syncResult.success && syncResult.files && syncResult.files.length > 0) {
+          addTermLine('ok', `Synced ${syncResult.files.length} files from container`);
+        }
+      } catch (err: any) {
+        console.log('Sync error:', err);
       }
     } catch (err: any) {
       console.error('Execution error:', err);
-      addTermLine('err', `✗ Connection error`);
+      addTermLine('err', `✗ Connection error: ${err.message}`);
     } finally {
       setExecuting(false);
     }
-  }, [files, activeFileId, settings, setExecuting]);
+  }, [files, activeFileId, sessionId, settings, setExecuting]);
 
   const handleStop = () => { setExecuting(false); addTermLine('err', '✗ Execution stopped by user'); };
 
@@ -519,7 +628,14 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     
     try {
       const token = localStorage.getItem('accessToken');
-      const termSessionId = sessionId || 'default';
+      
+      if (!sessionId) {
+        addTermLine('err', 'No project context');
+        setExecuting(false);
+        return;
+      }
+      
+      const allFiles = getAllFiles(files);
       
       const res = await fetch(`${API_URL}/api/terminal/execute`, {
         method: 'POST',
@@ -529,24 +645,66 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
         },
         body: JSON.stringify({ 
           command: cmd,
-          sessionId: termSessionId 
+          projectId: sessionId,
+          files: allFiles.map(f => ({ name: f.name, content: f.content || '' })),
         }),
       });
       
       const result = await res.json();
       
       if (result.success) {
-        if (result.output) {
-          result.output.split('\n').forEach((line: string) => {
+        if (result.stdout) {
+          result.stdout.split('\n').forEach((line: string) => {
             addTermLine('out', line);
+          });
+        }
+        if (result.stderr) {
+          result.stderr.split('\n').forEach((line: string) => {
+            addTermLine('err', line);
           });
         }
       } else {
         addTermLine('err', result.error || 'Command failed');
+        if (result.stderr) {
+          result.stderr.split('\n').forEach((line: string) => {
+            addTermLine('err', line);
+          });
+        }
+      }
+
+      // Sync files from Docker container back to browser
+      addTermLine('info', 'Syncing files from container...');
+      try {
+        const syncRes = await fetch(`${API_URL}/api/terminal/sync-from-container`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token && { 'Authorization': `Bearer ${token}` })
+          },
+          body: JSON.stringify({ projectId: sessionId }),
+        });
+        
+        const syncResult = await syncRes.json();
+        
+        if (syncResult.success && syncResult.files && syncResult.files.length > 0) {
+          // Merge container files into browser file tree
+          const newFiles = syncResult.files.map((f: { name: string; content: string; path: string }) => ({
+            name: f.name,
+            content: f.content,
+            path: f.path,
+          }));
+          
+          addTermLine('ok', `Synced ${newFiles.length} files from container`);
+          
+          // Dispatch event to update file tree
+          window.dispatchEvent(new CustomEvent('container-files-synced', { detail: newFiles }));
+        }
+      } catch (err: any) {
+        addTermLine('err', `Failed to sync files: ${err.message}`);
       }
     } catch (err: any) {
       console.error('Terminal error:', err);
-      addTermLine('err', `Connection error`);
+      addTermLine('err', `Connection error: ${err.message}`);
     } finally {
       setExecuting(false);
     }

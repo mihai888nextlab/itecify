@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, Component, ErrorInfo, ReactNode } f
 import { useRouter } from 'next/router';
 import { WorkspaceLayout } from '@/components/layout/WorkspaceLayout';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useEditorStore, FileNode, loadProjectFiles } from '@/stores/editorStore';
 import { useToast, ToastProvider } from '@/components/ui/Toast';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -66,6 +67,54 @@ function WorkspacePageContent() {
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
+  const initContainer = async (project: any, token: string, files: FileNode[]) => {
+    try {
+      await fetch(`${API_URL}/api/terminal/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          projectId: project.id,
+          image: project.containerImage || 'node:20',
+        }),
+      });
+
+      const flatFiles: { name: string; content: string }[] = [];
+      const collectFiles = (nodes: FileNode[]) => {
+        for (const node of nodes) {
+          if (node.type === 'file') {
+            flatFiles.push({
+              name: node.name,
+              content: node.content || '',
+            });
+          }
+          if (node.children) {
+            collectFiles(node.children);
+          }
+        }
+      };
+      collectFiles(files);
+
+      if (flatFiles.length > 0) {
+        await fetch(`${API_URL}/api/terminal/sync-files`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            projectId: project.id,
+            files: flatFiles,
+          }),
+        });
+      }
+    } catch (err) {
+      console.error('Failed to initialize container:', err);
+    }
+  };
+
   useEffect(() => {
     mountedRef.current = true;
     
@@ -101,11 +150,14 @@ function WorkspacePageContent() {
         }
         return res.json();
       })
-      .then(data => {
+      .then(async data => {
         if (mountedRef.current) {
           setProject(data);
           setSession(data.id, data.name);
           setConnected(true);
+
+          const files = await loadProjectFiles(projectId as string);
+          initContainer(data, token, files);
           setIsLoading(false);
         }
       })

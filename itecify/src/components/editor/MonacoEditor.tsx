@@ -91,6 +91,49 @@ export function CollaboratingEditor({ projectId, user, onEditorMount }: Collabor
     }
   }, [onEditorMount]);
 
+  // Update cursor decorations when awareness changes
+  const updateCursorDecorations = useCallback(() => {
+    if (!editorRef.current || !monacoRef.current || !providerRef.current) return;
+
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    const model = editor.getModel();
+    if (!model) return;
+
+    const decorations: any[] = [];
+    const newDecorations: string[] = [];
+
+    providerRef.current.awareness.getStates().forEach((state: any) => {
+      if (state.user && state.user.id !== user.id && state.cursor) {
+        const { lineNumber, column } = state.cursor;
+        
+        // Cursor line decoration
+        decorations.push({
+          range: new monaco.Range(lineNumber, column, lineNumber, column + 1),
+          options: {
+            className: `cursor-decoration-${state.user.color.replace('#', '')}`,
+            beforeContentClassName: 'remote-cursor',
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          },
+        });
+
+        // Cursor label
+        decorations.push({
+          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+          options: {
+            marginClassName: `cursor-label-${state.user.color.replace('#', '')}`,
+            glyphMarginClassName: 'cursor-glyph',
+            glyphMarginHoverMessage: { value: state.user.name },
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          },
+        });
+      }
+    });
+
+    newDecorations.push(...editor.deltaDecorations(decorationsRef.current, decorations));
+    decorationsRef.current = newDecorations;
+  }, [user.id]);
+
   // Initialize Yjs and WebSocket provider
   useEffect(() => {
     const ydoc = new Y.Doc();
@@ -125,50 +168,7 @@ export function CollaboratingEditor({ projectId, user, onEditorMount }: Collabor
       provider.destroy();
       ydoc.destroy();
     };
-  }, [projectId, user]);
-
-  // Update cursor decorations when awareness changes
-  const updateCursorDecorations = useCallback(() => {
-    if (!editorRef.current || !monacoRef.current || !providerRef.current) return;
-
-    const monaco = monacoRef.current;
-    const editor = editorRef.current;
-    const model = editor.getModel();
-    if (!model) return;
-
-    const decorations: any[] = [];
-    const newDecorations: string[] = [];
-
-    providerRef.current.awareness.getStates().forEach((state: any, clientId: number) => {
-      if (state.user && state.user.id !== user.id && state.cursor) {
-        const { lineNumber, column } = state.cursor;
-        
-        // Cursor line decoration
-        decorations.push({
-          range: new monaco.Range(lineNumber, column, lineNumber, column + 1),
-          options: {
-            className: `cursor-decoration-${state.user.color.replace('#', '')}`,
-            beforeContentClassName: 'remote-cursor',
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-          },
-        });
-
-        // Cursor label
-        decorations.push({
-          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
-          options: {
-            marginClassName: `cursor-label-${state.user.color.replace('#', '')}`,
-            glyphMarginClassName: 'cursor-glyph',
-            glyphMarginHoverMessage: { value: state.user.name },
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-          },
-        });
-      }
-    });
-
-    newDecorations.push(...editor.deltaDecorations(decorationsRef.current, decorations));
-    decorationsRef.current = newDecorations;
-  }, [user.id]);
+  }, [projectId, user, updateCursorDecorations]);
 
   // Bind Y.Text to Monaco model when file changes
   useEffect(() => {
