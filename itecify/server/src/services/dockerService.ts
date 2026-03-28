@@ -153,12 +153,14 @@ export async function executeInContainer(
   
   try {
     const fullCommand = `docker exec -w ${workDir} ${container.name} ${command}`;
-    const { stdout, stderr } = await execAsync(fullCommand, { timeout: 30000 });
-    console.log(`[DockerService] Command output: ${stdout}`);
+    const { stdout, stderr } = await execAsync(fullCommand, { timeout: 60000 }); // Increased timeout for npm
+    console.log(`[DockerService] Command stdout: ${stdout.substring(0, 500)}`);
+    console.log(`[DockerService] Command stderr: ${stderr.substring(0, 500)}`);
     return { stdout, stderr, exitCode: 0 };
   } catch (error: any) {
     console.error(`[DockerService] Command failed:`, error.message);
     if (error.stdout) {
+      console.log(`[DockerService] Error stdout: ${error.stdout.substring(0, 500)}`);
       return {
         stdout: error.stdout,
         stderr: error.stderr || '',
@@ -272,13 +274,19 @@ export async function readAllContainerFiles(
     console.log(`[DockerService] Parsed filenames:`, filenames);
     
     for (const filename of filenames) {
+      // Skip node_modules - too many files, don't sync them
+      if (filename === 'node_modules' || filename.endsWith('/node_modules')) {
+        console.log(`[DockerService] Skipping node_modules`);
+        continue;
+      }
+      
       const filePath = `${workDir}/${filename}`;
-      const tempPath = `/tmp/itecify-${Date.now()}-${filename}`;
+      const tempPath = `/tmp/itecify-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       
       try {
         // Use docker cp to copy file from container to host temp, then read it
         const copyCmd = `docker cp ${container.name}:${filePath} "${tempPath}"`;
-        await execAsync(copyCmd);
+        await execAsync(copyCmd, { timeout: 5000 });
         
         // Read the temp file
         const fs = await import('fs');
@@ -327,16 +335,20 @@ export async function copyFilesToContainer(
     await execAsync(`docker exec ${container.name} mkdir -p ${workDir}`);
     
     for (const file of files) {
-      console.log(`[DockerService] Writing file: ${file.name}`);
+      console.log(`[DockerService] Writing file: ${file.name} (${file.content.length} chars)`);
       
-      // Use base64 encoding to avoid shell escaping issues on Windows
-      const base64Content = Buffer.from(file.content).toString('base64');
-      const base64Name = Buffer.from(file.name).toString('base64');
+      // Write content to a temporary file on the host
+      const tempPath = `/tmp/itecify-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       
-      // Decode base64 content directly into the file
-      await execAsync(
-        `docker exec ${container.name} /bin/sh -c "echo '${base64Content}' | base64 -d > ${workDir}/${file.name}"`
-      );
+      // Write file content to temp location
+      fs.writeFileSync(tempPath, file.content);
+      
+      // Use docker cp to copy file into container
+      const containerPath = `${workDir}/${file.name}`;
+      await execAsync(`docker cp "${tempPath}" ${container.name}:${containerPath}`);
+      
+      // Delete temp file
+      fs.unlinkSync(tempPath);
     }
     
     console.log(`[DockerService] Files synced successfully`);

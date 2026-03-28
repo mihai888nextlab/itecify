@@ -251,19 +251,24 @@ const terminalRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       const container = getProjectContainer(body.projectId);
       
       if (!container) {
+        fastify.log.error('[Terminal] Container not found during sync');
         return reply.code(400).send({
           success: false,
           error: 'Container not found',
         });
       }
       
+      fastify.log.info(`[Terminal] Container status: ${container.status}, name: ${container.name}`);
+      
       if (container.status !== 'running') {
+        fastify.log.info('[Terminal] Container not running, starting it');
         await startContainer(body.projectId);
       }
       
       const files = await readAllContainerFiles(body.projectId);
       
       fastify.log.info(`[Terminal] Read ${files.length} files from container`);
+      files.forEach(f => fastify.log.info(`  - ${f.name} (${f.content.length} bytes)`));
       
       return {
         success: true,
@@ -275,6 +280,43 @@ const terminalRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         success: false,
         error: error.message,
       });
+    }
+  });
+
+  fastify.get('/debug/:projectId', async (request, reply) => {
+    try {
+      const { projectId } = request.params as { projectId: string };
+      
+      const container = getProjectContainer(projectId);
+      
+      if (!container) {
+        return { exists: false, error: 'Container not in memory' };
+      }
+      
+      // Run ls directly in container to see what's there
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      
+      const workDir = `/workspace/${projectId}`;
+      
+      const { stdout: dockerLs } = await execAsync(
+        `docker exec ${container.name} ls -la "${workDir}" 2>&1`
+      );
+      
+      const { stdout: dockerLsRoot } = await execAsync(
+        `docker exec ${container.name} ls -la /workspace 2>&1`
+      );
+      
+      return {
+        exists: true,
+        containerName: container.name,
+        containerStatus: container.status,
+        workDirContents: dockerLs,
+        workspaceContents: dockerLsRoot,
+      };
+    } catch (error: any) {
+      return { error: error.message };
     }
   });
 };
