@@ -19,6 +19,7 @@ export interface Container {
   status: 'running' | 'stopped' | 'error';
   image: string;
   projectId: string;
+  hostPort?: number;
 }
 
 const containers = new Map<string, Container>();
@@ -59,14 +60,18 @@ export async function createContainer(config: ContainerConfig): Promise<Containe
       
       const workdir = `/workspace/${config.projectId}`;
       
-      // Use docker run -d to keep container running in background
+      // Map common ports - use host port 3000 + offset based on projectId hash
+      const portOffset = config.projectId.charCodeAt(0) % 10;
+      const hostPort = 3000 + portOffset;
+      
+      // Use docker run -d to keep container running in background with port mapping
       const { stdout } = await execAsync(
-        `docker run -d --name ${containerName} -w ${workdir} ${config.image} tail -f /dev/null`
+        `docker run -d --name ${containerName} -p ${hostPort}:3000 -w ${workdir} ${config.image} tail -f /dev/null`
       );
       
       const containerId = stdout.trim();
       
-      console.log(`[DockerService] Created container ${containerName} with ID ${containerId}`);
+      console.log(`[DockerService] Created container ${containerName} with ID ${containerId}, port ${hostPort} -> 3000`);
       
       const container: Container = {
         id: containerId,
@@ -74,6 +79,7 @@ export async function createContainer(config: ContainerConfig): Promise<Containe
         status: 'running',
         image: config.image,
         projectId: config.projectId,
+        hostPort,
       };
       
       containers.set(config.projectId, container);
@@ -149,20 +155,61 @@ export async function executeInContainer(
   
   const workDir = workdir || `/workspace/${projectId}`;
   
-  console.log(`[DockerService] Executing: docker exec -w ${workDir} ${container.name} ${command}`);
+  // Detect long-running processes (servers, watchers, etc.) - more specific patterns
+  const longRunningPatterns = [
+    /npm\s+(run\s+)?dev/i,
+    /npm\s+(run\s+)?start/i,
+    /npm\s+(run\s+)?serve/i,
+    /npx\s+(ts-)?nodemon/i,
+    /nodemon/i,
+    /tsx\s+watch/i,
+    /python\s+.*\bhttp\.server\b/i,
+    /python\s+.*\bflask\b.*run/i,
+    /python\s+.*\bfastapi\b/i,
+    /node\s+.*\bserver\b/i,
+    /node\s+.*\bindex\.js\b.*\b\d{4,5}\b/i, // node server.js 3000
+  ];
+  
+  const isLongRunning = longRunningPatterns.some(pattern => pattern.test(command));
+  
+  // Commands that need shell (npm, pip, etc.)
+  const needsShell = /^(npm|pip|pip3|yarn|pnpm)/.test(command);
+  
+  console.log(`[DockerService] Executing: docker exec ${isLongRunning ? '-d' : ''} -w ${workDir} ${container.name} ${command}`);
+  
+  let stdout = '';
+  let stderr = '';
   
   try {
-    const fullCommand = `docker exec -w ${workDir} ${container.name} ${command}`;
-    const { stdout, stderr } = await execAsync(fullCommand, { timeout: 60000 }); // Increased timeout for npm
-    console.log(`[DockerService] Command stdout: ${stdout.substring(0, 500)}`);
-    console.log(`[DockerService] Command stderr: ${stderr.substring(0, 500)}`);
-    return { stdout, stderr, exitCode: 0 };
+    if (isLongRunning) {
+      const execCmd = needsShell
+        ? `docker exec -d -w ${workDir} ${container.name} sh -c "${command.replace(/"/g, '\\"')}"`
+        : `docker exec -d -w ${workDir} ${container.name} ${command}`;
+      await execAsync(execCmd, { timeout: 5000 });
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      stdout = `Server started in background: ${command}`;
+      return { stdout, stderr, exitCode: 0 };
+    } else {
+      const execCmd = needsShell
+        ? `docker exec -w ${workDir} ${container.name} sh -c "${command.replace(/"/g, '\\"')}"`
+        : `docker exec -w ${workDir} ${container.name} ${command}`;
+      const result = await execAsync(execCmd, { timeout: 120000 }); // Longer timeout for npm install
+      stdout = result.stdout;
+      stderr = result.stderr;
+      return { stdout, stderr, exitCode: 0 };
+    }
   } catch (error: any) {
     console.error(`[DockerService] Command failed:`, error.message);
-    if (error.stdout) {
-      console.log(`[DockerService] Error stdout: ${error.stdout.substring(0, 500)}`);
+    if (isLongRunning && (error.killed || error.code === 'ETIMEDOUT')) {
       return {
-        stdout: error.stdout,
+        stdout: 'Server started (process running in background)',
+        stderr: '',
+        exitCode: 0
+      };
+    }
+    if (error.stdout || error.stderr) {
+      return {
+        stdout: error.stdout || '',
         stderr: error.stderr || '',
         exitCode: error.code || 1
       };
@@ -236,78 +283,148 @@ export async function readContainerFile(
   }
 }
 
+async function getAllPathsRecursive(containerName: string, dirPath: string): Promise<string[]> {
+  const allPaths: string[] = [];
+  
+  try {
+    // Use docker exec without shell to avoid Windows Git Bash path mangling
+    // First try: list files with ls -1 (one per line)
+    let lsOutput = '';
+    try {
+      const result = await execAsync(
+        `docker exec ${containerName} ls -1 "${dirPath}"`,
+        { timeout: 10000 }
+      );
+      lsOutput = result.stdout;
+    } catch {
+      // Try with ls -la
+      const result = await execAsync(
+        `docker exec ${containerName} ls -la "${dirPath}"`,
+        { timeout: 10000 }
+      );
+      lsOutput = result.stdout;
+    }
+    
+    if (!lsOutput) return [];
+    
+    const lines = lsOutput.split('\n').filter(l => l.trim());
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Skip total, ., .., and special entries
+      if (!trimmed || trimmed === 'total' || trimmed === '.' || trimmed === '..') continue;
+      // Skip lines that don't look like file/dir names
+      if (trimmed.includes('Permission denied')) continue;
+      
+      // Parse ls -la format: drwxr-xr-x 2 root root 4096 Jan  1 00:00 dirname
+      // or -rw-r--r-- 1 root root 1234 Jan  1 00:00 filename
+      const parts = trimmed.split(/\s+/);
+      const lastPart = parts[parts.length - 1];
+      
+      if (!lastPart || lastPart === '.' || lastPart === '..') continue;
+      
+      // Check if directory (starts with d) or regular file (starts with -)
+      const isDir = trimmed.startsWith('d');
+      
+      if (isDir && lastPart !== '.') {
+        // Recursively get files from subdirectory
+        const subPath = `${dirPath}/${lastPart}`;
+        const subFiles = await getAllPathsRecursive(containerName, subPath);
+        for (const sf of subFiles) {
+          allPaths.push(`${lastPart}/${sf}`);
+        }
+      } else if (!isDir && lastPart.includes('.')) {
+        // Regular file with extension
+        allPaths.push(lastPart);
+      } else if (!isDir && !lastPart.includes('.') && parts.length >= 5) {
+        // File without extension (like Makefile, Dockerfile)
+        allPaths.push(lastPart);
+      }
+    }
+  } catch (error: any) {
+    console.log(`[DockerService] Error getting paths from ${dirPath}:`, error.message);
+  }
+  
+  return Array.from(new Set(allPaths.filter(p => p && !p.includes('node_modules'))));
+}
+
 export async function readAllContainerFiles(
   projectId: string
-): Promise<{ name: string; content: string; path: string }[]> {
+): Promise<{ name: string; content: string; path: string; type: 'file' | 'directory'; children?: string[] }[]> {
   const container = containers.get(projectId);
   if (!container) {
     throw new Error(`Container not found for project ${projectId}`);
   }
   
   const workDir = `/workspace/${projectId}`;
+  const files: { name: string; content: string; path: string; type: 'file' | 'directory' }[] = [];
+  const dirSet = new Set<string>();
   
   try {
-    // Check what's in /workspace first
-    const { stdout: wsList } = await execAsync(
-      `docker exec ${container.name} ls -la /workspace 2>&1 || echo "DIR_NOT_FOUND"`
-    );
-    console.log(`[DockerService] Contents of /workspace:`, wsList);
+    // Try multiple methods to get file list
+    const allPaths = await getAllPathsRecursive(container.name, workDir);
     
-    // Check if workDir exists
-    const { stdout: dirCheck } = await execAsync(
-      `docker exec ${container.name} ls -la "${workDir}" 2>&1 || echo "SUBDIR_NOT_FOUND"`
-    );
-    console.log(`[DockerService] Contents of ${workDir}:`, dirCheck);
+    console.log(`[DockerService] Found ${allPaths.length} paths in container`);
     
-    // If /workspace only has the project dir, check the project dir directly
-    const { stdout: fileList } = await execAsync(
-      `docker exec ${container.name} ls -1a "${workDir}" 2>&1 || echo ""`
-    );
-    
-    console.log(`[DockerService] ls -1a output for ${workDir}:`, JSON.stringify(fileList));
-    
-    const files: { name: string; content: string; path: string }[] = [];
-    
-    // Parse file list - ls -1a gives all filenames including hidden
-    const filenames = fileList.split('\n').map(f => f.trim()).filter(f => f && f !== '.' && f !== '..');
-    
-    console.log(`[DockerService] Parsed filenames:`, filenames);
-    
-    for (const filename of filenames) {
-      // Skip node_modules - too many files, don't sync them
-      if (filename === 'node_modules' || filename.endsWith('/node_modules')) {
-        console.log(`[DockerService] Skipping node_modules`);
-        continue;
-      }
+    // Collect directories and filter files
+    for (const relativePath of allPaths) {
+      if (!relativePath || relativePath.includes('node_modules')) continue;
       
-      const filePath = `${workDir}/${filename}`;
-      const tempPath = `/tmp/itecify-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const parts = relativePath.split('/');
       
-      try {
-        // Use docker cp to copy file from container to host temp, then read it
-        const copyCmd = `docker cp ${container.name}:${filePath} "${tempPath}"`;
-        await execAsync(copyCmd, { timeout: 5000 });
-        
-        // Read the temp file
-        const fs = await import('fs');
-        const content = fs.readFileSync(tempPath, 'utf8');
-        
-        // Delete temp file
-        fs.unlinkSync(tempPath);
-        
-        console.log(`[DockerService] Read ${filename}: length = ${content.length}`);
-        
-        files.push({
-          name: filename,
-          path: filename,
-          content: content,
-        });
-      } catch (err: any) {
-        console.log(`[DockerService] Failed to read file ${filename}:`, err.message);
+      // Skip node_modules
+      if (parts.some(p => p === 'node_modules')) continue;
+      
+      // Add all parent directories to dirSet
+      let currentPath = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
+        dirSet.add(currentPath);
       }
     }
     
-    console.log(`[DockerService] Read ${files.length} files from container:`, files.map(f => f.name));
+    // Add directories first (sorted for proper hierarchy)
+    const sortedDirs = Array.from(dirSet).sort((a, b) => a.split('/').length - b.split('/').length);
+    for (const dirPath of sortedDirs) {
+      const name = dirPath.split('/').pop() || dirPath;
+      files.push({
+        name,
+        content: '',
+        path: dirPath,
+        type: 'directory',
+      });
+    }
+    
+    // Add files with content
+    for (const relativePath of allPaths) {
+      if (!relativePath || relativePath.includes('node_modules')) continue;
+      
+      const parts = relativePath.split('/');
+      if (parts.some(p => p === 'node_modules')) continue;
+      
+      const filename = relativePath.split('/').pop() || relativePath;
+      const fullPath = `${workDir}/${relativePath}`;
+      
+      try {
+        const { stdout: content } = await execAsync(
+          `docker exec ${container.name} cat "${fullPath}" 2>/dev/null || echo ""`,
+          { timeout: 5000 }
+        );
+        
+        if (content !== undefined) {
+          files.push({
+            name: filename,
+            content: content,
+            path: relativePath,
+            type: 'file',
+          });
+        }
+      } catch (err: any) {
+        console.log(`[DockerService] Failed to read ${filename}:`, err.message);
+      }
+    }
+    
+    console.log(`[DockerService] Read ${files.length} items (${dirSet.size} dirs, ${files.filter(f => f.type === 'file').length} files)`);
     return files;
   } catch (error: any) {
     console.error(`[DockerService] Failed to read all files:`, error.message);

@@ -10,7 +10,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import {
-  Zap, Terminal as TerminalIcon, X, FileCode, Play, Square, Copy, ExternalLink, Settings, Files, Search, GitBranch, Puzzle, Bot, Eye, Send, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, Circle, Sparkles, Maximize2, Minimize2, Plus, FolderPlus, File, Hash, ArrowRight, CornerDownLeft, MoreHorizontal, Trash2, Pencil, Folder, Users, Code2, Terminal, Star, GitMerge, Wand2
+  Zap, Terminal as TerminalIcon, X, FileCode, Play, Square, Copy, ExternalLink, Settings, Files, Search, GitBranch, Puzzle, Bot, Eye, Send, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, Circle, Sparkles, Maximize2, Minimize2, Plus, FolderPlus, File, Hash, ArrowRight, CornerDownLeft, MoreHorizontal, Trash2, Pencil, Folder, Users, Code2, Terminal, Star, GitMerge, Wand2, Rocket, Server, Globe, CircleDot, StopCircle
 } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -37,6 +37,7 @@ const C = {
 
 const RAIL_ITEMS = [
   { id: 'files', icon: <Files size={16} />, label: 'Explorer' },
+  { id: 'deployments', icon: <Rocket size={16} />, label: 'Deployments' },
   { id: 'search', icon: <Search size={16} />, label: 'Search' },
   { id: 'git', icon: <GitBranch size={16} />, label: 'Git' },
   { id: 'ext', icon: <Puzzle size={16} />, label: 'Extensions' },
@@ -217,14 +218,14 @@ function SearchPanel({ onResultClick }: { onResultClick: (fileId: string, line?:
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const getAllFiles = useCallback((nodes: any[]): any[] => {
+  const getAllFiles = (nodes: any[]): any[] => {
     const result: any[] = [];
     for (const node of nodes) {
       if (node.type === 'file') result.push(node);
       if (node.children) result.push(...getAllFiles(node.children));
     }
     return result;
-  }, []);
+  };
 
   const performSearch = useCallback((searchQuery: string, searchMode: 'files' | 'content') => {
     if (!searchQuery.trim()) {
@@ -506,7 +507,6 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
   const [completedAgentId, setCompletedAgentId] = useState<string | null>(null);
   const [rightPanel, setRightPanel] = useState<'chat' | 'security'>('chat');
-  const [termInput, setTermInput] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [chatMsgs, setChatMsgs] = useState([{ from: 'system', text: '✦ Connected to session', time: 'now' }]);
   const [toast, setToast] = useState<string | null>(null);
@@ -518,6 +518,8 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [newFolderName, setNewFolderName] = useState('');
   const [dropdownFileId, setDropdownFileId] = useState<string | null>(null);
   const [renameFileId, setRenameFileId] = useState<string | null>(null);
+  const [deployments, setDeployments] = useState<{ name: string; url: string; port: number; status: 'running' | 'stopped' }[]>([]);
+  const [deploymentRefreshKey, setDeploymentRefreshKey] = useState(0);
   const [renameValue, setRenameValue] = useState('');
   const [connectedUsers, setConnectedUsers] = useState<any[]>([]);
   const [isWsConnected, setIsWsConnected] = useState(false);
@@ -766,32 +768,96 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   // Listen for container files synced event
   React.useEffect(() => {
     const handleContainerFilesSynced = (event: CustomEvent) => {
-      const containerFiles = event.detail as { name: string; content: string; path: string }[];
+      const containerFiles = event.detail as { name: string; content: string; path: string; type: 'file' | 'directory' }[];
       
-      // Add or update files in the editor store
-      containerFiles.forEach(containerFile => {
-        // Check if file already exists by name
-        const existingFile = files.find(f => f.name === containerFile.name);
+      // Find folder by path in nested tree, return parentId and folder info
+      const findFolderByPath = (nodes: any[], targetPath: string): { parentId: string | undefined; exists: boolean } => {
+        const pathParts = targetPath.split('/');
         
-        if (!existingFile) {
-          // Add new file
-          const language = getLanguageFromFileName(containerFile.name);
-          addFile({
-            name: containerFile.name,
-            type: 'file',
-            language,
-            content: containerFile.content,
-          }, undefined, sessionId);
-        } else if (existingFile.content !== containerFile.content) {
-          // Update existing file content
-          updateFileContent(existingFile.id, containerFile.content);
+        // Start at root level
+        let currentLevel = nodes;
+        let parentId: string | undefined = undefined;
+        let currentPath = '';
+        
+        for (let i = 0; i < pathParts.length; i++) {
+          const part = pathParts[i];
+          currentPath = currentPath ? `${currentPath}/${part}` : part;
+          
+          // Find this part in current level
+          const found = currentLevel.find((node: any) => node.name === part && node.type === 'folder');
+          
+          if (found) {
+            // Move into this folder
+            parentId = found.id;
+            currentLevel = found.children || [];
+          } else {
+            // Folder doesn't exist, need to create it
+            return { parentId, exists: false };
+          }
         }
+        
+        return { parentId, exists: true };
+      };
+      
+      // Find file by path in nested tree
+      const findFileByPath = (nodes: any[], targetPath: string): any => {
+        const pathParts = targetPath.split('/');
+        const fileName = pathParts.pop();
+        let currentLevel = nodes;
+        let parentId: string | undefined = undefined;
+        
+        for (const part of pathParts) {
+          const folder = currentLevel.find((node: any) => node.name === part && node.type === 'folder');
+          if (folder) {
+            parentId = folder.id;
+            currentLevel = folder.children || [];
+          } else {
+            return null;
+          }
+        }
+        
+        return currentLevel.find((node: any) => node.name === fileName && node.type === 'file');
+      };
+      
+      // Sort: directories first (by depth), then files
+      const sortedFiles = [...containerFiles].sort((a, b) => {
+        if (a.type !== b.type) {
+          return a.type === 'directory' ? -1 : 1;
+        }
+        return a.path.split('/').length - b.path.split('/').length;
       });
+      
+      // Process files in order
+      for (const containerFile of sortedFiles) {
+        if (containerFile.type === 'directory') {
+          const { parentId, exists } = findFolderByPath(files, containerFile.path);
+          if (!exists) {
+            addFolder(containerFile.name, parentId);
+          }
+        } else {
+          const existingFile = findFileByPath(files, containerFile.path);
+          if (!existingFile) {
+            // Find the parent folder
+            const pathParts = containerFile.path.split('/');
+            const fileName = pathParts.pop();
+            const { parentId } = findFolderByPath(files, pathParts.join('/'));
+            const language = getLanguageFromFileName(fileName || containerFile.name);
+            addFile({
+              name: fileName || containerFile.name,
+              type: 'file',
+              language,
+              content: containerFile.content,
+            }, parentId, sessionId);
+          } else if (existingFile.content !== containerFile.content) {
+            updateFileContent(existingFile.id, containerFile.content);
+          }
+        }
+      }
     };
     
     window.addEventListener('container-files-synced', handleContainerFilesSynced as EventListener);
     return () => window.removeEventListener('container-files-synced', handleContainerFilesSynced as EventListener);
-  }, [files, sessionId, addFile, updateFileContent]);
+  }, [files, sessionId, addFile, updateFileContent, addFolder]);
 
   const getAllFiles = (nodes: any[]): any[] => {
     const result: any[] = [];
@@ -889,12 +955,53 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     toastRef.current = setTimeout(() => setToast(null), 2200);
   }, []);
 
-  const [terminalLines, setTerminalLines] = useState<Array<{ type: string; text: string }>>([
-    { type: 'info', text: 'iTECify sandbox v1.0 — ready' }
+  interface TerminalSession {
+    id: string;
+    name: string;
+    lines: Array<{ type: string; text: string }>;
+    input: string;
+  }
+
+  const [terminals, setTerminals] = useState<TerminalSession[]>([
+    { id: 'main', name: 'Terminal 1', lines: [{ type: 'info', text: 'iTECify sandbox v1.0 — ready' }], input: '' }
   ]);
+  const [activeTerminalId, setActiveTerminalId] = useState('main');
+
+  const activeTerminal = terminals.find(t => t.id === activeTerminalId) || terminals[0];
 
   const addTermLine = (type: string, text: string) => {
-    setTerminalLines(prev => [...prev, { type, text }]);
+    setTerminals(prev => prev.map(t => 
+      t.id === activeTerminalId 
+        ? { ...t, lines: [...t.lines, { type, text }] }
+        : t
+    ));
+  };
+
+  const updateTermInput = (input: string) => {
+    setTerminals(prev => prev.map(t => 
+      t.id === activeTerminalId ? { ...t, input } : t
+    ));
+  };
+
+  const createTerminal = () => {
+    const newId = `term-${Date.now()}`;
+    const newTerm: TerminalSession = {
+      id: newId,
+      name: `Terminal ${terminals.length + 1}`,
+      lines: [{ type: 'info', text: `Terminal ${terminals.length + 1} — ready` }],
+      input: ''
+    };
+    setTerminals(prev => [...prev, newTerm]);
+    setActiveTerminalId(newId);
+  };
+
+  const closeTerminal = (id: string) => {
+    if (terminals.length <= 1) return;
+    const newTerminals = terminals.filter(t => t.id !== id);
+    setTerminals(newTerminals);
+    if (activeTerminalId === id) {
+      setActiveTerminalId(newTerminals[0].id);
+    }
   };
 
   const handleRun = useCallback(async () => {
@@ -995,21 +1102,76 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
 
   const handleStop = () => { setExecuting(false); addTermLine('err', '✗ Execution stopped by user'); };
 
+  const handleStopDeployment = async (dep: { name: string; url: string; port: number; status: string }) => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      await fetch(`${API_URL}/api/terminal/stop-deployment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ projectId: sessionId }),
+      });
+      setDeployments(prev => prev.filter(d => d.url !== dep.url));
+      addTermLine('info', `Deployment stopped: ${dep.name}`);
+    } catch (err) {
+      console.error('Failed to stop deployment:', err);
+    }
+  };
+
+  const fetchDeployments = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const token = localStorage.getItem('accessToken');
+      const res = await fetch(`${API_URL}/api/terminal/debug/${sessionId}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.serverUrl) {
+          setDeployments([{
+            name: 'Node Server',
+            url: data.serverUrl,
+            port: data.hostPort || 3000,
+            status: 'running',
+          }]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch deployments:', err);
+    }
+  }, [sessionId]);
+
+  // Fetch deployments when tab is active
+  useEffect(() => {
+    if (activeRail === 'deployments') {
+      fetchDeployments();
+    }
+  }, [activeRail, fetchDeployments, deploymentRefreshKey]);
+
   const handleTermCmd = async (cmd: string) => {
     addTermLine('prompt', `$ ${cmd}`);
     
     if (cmd === 'help') {
-      setTerminalLines(prev => [...prev, { type: 'info', text: 'Available commands:' }]);
-      setTerminalLines(prev => [...prev, { type: 'info', text: '  help     - Show this help' }]);
-      setTerminalLines(prev => [...prev, { type: 'info', text: '  clear    - Clear terminal' }]);
-      setTerminalLines(prev => [...prev, { type: 'info', text: '  run      - Run current file' }]);
-      setTerminalLines(prev => [...prev, { type: 'info', text: '  status   - Show status' }]);
-      setTerminalLines(prev => [...prev, { type: 'info', text: '  npm, npx, git, node, python, etc. - Run shell commands' }]);
+      addTermLine('info', 'Available commands:');
+      addTermLine('info', '  help     - Show this help');
+      addTermLine('info', '  clear    - Clear terminal');
+      addTermLine('info', '  run      - Run current file');
+      addTermLine('info', '  new      - Create new terminal');
+      addTermLine('info', '  status   - Show status');
+      addTermLine('info', '  npm, npx, git, node, python, etc. - Run shell commands');
       return;
     }
     
     if (cmd === 'clear') {
-      setTerminalLines([]);
+      setTerminals(prev => prev.map(t => 
+        t.id === activeTerminalId 
+          ? { ...t, lines: [{ type: 'info', text: 'Terminal cleared' }] }
+          : t
+      ));
+      return;
+    }
+    
+    if (cmd === 'new') {
+      createTerminal();
       return;
     }
     
@@ -1019,7 +1181,7 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     }
     
     if (cmd === 'status') {
-      setTerminalLines(prev => [...prev, { type: 'info', text: `Status: ${isExecuting ? 'Running' : 'Idle'}` }]);
+      addTermLine('info', `Status: ${isExecuting ? 'Running' : 'Idle'}`);
       return;
     }
     
@@ -1087,13 +1249,14 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
         
         if (syncResult.success && syncResult.files && syncResult.files.length > 0) {
           // Merge container files into browser file tree
-          const newFiles = syncResult.files.map((f: { name: string; content: string; path: string }) => ({
+          const newFiles = syncResult.files.map((f: { name: string; content: string; path: string; type: 'file' | 'directory' }) => ({
             name: f.name,
             content: f.content,
             path: f.path,
+            type: f.type,
           }));
           
-          addTermLine('ok', `Synced ${newFiles.length} files from container`);
+          addTermLine('ok', `Synced ${newFiles.length} items from container`);
           
           // Dispatch event to update file tree
           window.dispatchEvent(new CustomEvent('container-files-synced', { detail: newFiles }));
@@ -1316,6 +1479,53 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
           </div>
 
           <div style={{ backgroundColor: C.surface, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {activeRail === 'deployments' && (
+              <div style={{ padding: '10px 12px', flex: 1, overflow: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <span className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: '.12em', textTransform: 'uppercase' }}>Deployments</span>
+                  <button onClick={() => setDeploymentRefreshKey(k => k + 1)} title="Refresh" style={{ padding: 4, background: C.card, border: `1px solid ${C.border}`, color: C.muted, cursor: 'pointer', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <RefreshCw size={12} />
+                  </button>
+                </div>
+                
+                {deployments.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '20px 0', color: C.muted }}>
+                    <Server size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
+                    <p style={{ fontSize: 12, margin: 0 }}>No active deployments</p>
+                    <p style={{ fontSize: 11, margin: '4px 0 0' }}>Run a server command to see it here</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {deployments.map((dep, i) => (
+                      <div key={i} style={{ backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: dep.status === 'running' ? C.green : C.muted }} />
+                          <span style={{ fontSize: 12, fontWeight: 500, color: C.text }}>{dep.name}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                          <Globe size={11} style={{ color: C.muted }} />
+                          <a href={dep.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.blue, textDecoration: 'none' }}>
+                            {dep.url}
+                          </a>
+                          <button onClick={() => navigator.clipboard.writeText(dep.url)} title="Copy URL" style={{ padding: 2, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer' }}>
+                            <Copy size={11} />
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button onClick={() => window.open(dep.url, '_blank')} style={{ flex: 1, padding: '4px 8px', backgroundColor: C.blue, border: 'none', borderRadius: 4, color: '#fff', fontSize: 11, cursor: 'pointer' }}>
+                            Open
+                          </button>
+                          <button onClick={() => handleStopDeployment(dep)} style={{ padding: '4px 8px', backgroundColor: C.red, border: 'none', borderRadius: 4, color: '#fff', fontSize: 11, cursor: 'pointer' }}>
+                            <StopCircle size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            
             {activeRail === 'files' && (
               <>
                 <div style={{ padding: '10px 12px 6px' }}>
@@ -1637,19 +1847,41 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
 
             <div style={{ height: isTerminalCollapsed ? 32 : terminalHeight, backgroundColor: '#0d1117', borderTop: `1px solid ${C.border}`, transition: 'height 0.2s ease', display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
               <div style={{ height: 4, cursor: 'ns-resize', backgroundColor: 'transparent' }} onMouseDown={handleResizeStart} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = C.cyan} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'} />
-              <div style={{ height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px', backgroundColor: C.surface, borderBottom: `1px solid ${C.border}`, cursor: 'pointer', flexShrink: 0 }}
-                onClick={() => setIsTerminalCollapsed(!isTerminalCollapsed)}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <TerminalIcon size={14} color={C.muted} />
-                  <span className="mono" style={{ fontSize: 11, color: C.text }}>Output</span>
+              <div style={{ display: 'flex', alignItems: 'center', height: 32, backgroundColor: C.surface, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+                <div style={{ display: 'flex', flex: 1, overflow: 'auto' }}>
+                  {terminals.map(term => (
+                    <div key={term.id} style={{ 
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '0 12px', cursor: 'pointer', height: 32,
+                      borderRight: `1px solid ${C.border}`,
+                      backgroundColor: term.id === activeTerminalId ? '#0d1117' : 'transparent',
+                      color: term.id === activeTerminalId ? C.text : C.muted,
+                    }} onClick={() => setActiveTerminalId(term.id)}>
+                      <TerminalIcon size={12} />
+                      <span className="mono" style={{ fontSize: 11 }}>{term.name}</span>
+                      {terminals.length > 1 && (
+                        <button onClick={(e) => { e.stopPropagation(); closeTerminal(term.id); }} style={{ padding: 2, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', borderRadius: 2, display: 'flex', alignItems: 'center' }}>
+                          <X size={10} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={createTerminal} style={{ padding: '0 8px', height: 32, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="New Terminal">
+                    <Plus size={14} />
+                  </button>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); setIsTerminalCollapsed(!isTerminalCollapsed); }} style={{ padding: 4, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', borderRadius: 4 }}>
+                <button onClick={() => setIsTerminalCollapsed(!isTerminalCollapsed)} style={{ padding: 4, margin: '0 8px', background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', borderRadius: 4, display: 'flex', alignItems: 'center' }}>
                   {isTerminalCollapsed ? <Maximize2 size={14} /> : <Minimize2 size={14} />}
                 </button>
               </div>
               
               {!isTerminalCollapsed && (
-                <TerminalPanel lines={terminalLines} input={termInput} onInputChange={setTermInput} onCommand={handleTermCmd} />
+                <TerminalPanel 
+                  lines={activeTerminal?.lines || []} 
+                  input={activeTerminal?.input || ''} 
+                  onInputChange={updateTermInput} 
+                  onCommand={handleTermCmd} 
+                />
               )}
             </div>
 

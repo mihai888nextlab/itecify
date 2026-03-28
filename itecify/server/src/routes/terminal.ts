@@ -312,11 +312,35 @@ const terminalRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         exists: true,
         containerName: container.name,
         containerStatus: container.status,
+        hostPort: container.hostPort,
+        serverUrl: container.hostPort ? `http://localhost:${container.hostPort}` : null,
         workDirContents: dockerLs,
         workspaceContents: dockerLsRoot,
       };
     } catch (error: any) {
       return { error: error.message };
+    }
+  });
+
+  fastify.post('/stop-deployment', async (request, reply) => {
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      
+      const body = request.body as { projectId: string };
+      const container = getProjectContainer(body.projectId);
+      
+      if (!container) {
+        return { success: false, error: 'Container not found' };
+      }
+
+      // Kill any running node processes in the container
+      await execAsync(`docker exec ${container.name} pkill -f "node" 2>/dev/null || true`);
+      
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
     }
   });
 };

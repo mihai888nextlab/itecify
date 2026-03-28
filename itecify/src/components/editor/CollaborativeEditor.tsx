@@ -412,14 +412,15 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         const newFiles = buildTree(null);
         const localFiles = useEditorStore.getState().files;
         
-        if (JSON.stringify(newFiles) !== JSON.stringify(localFiles)) {
+        // Only update if Yjs has files (don't overwrite with empty)
+        if (newFiles.length > 0 && JSON.stringify(newFiles) !== JSON.stringify(localFiles)) {
           console.log('[Sync] Files synced from Yjs:', newFiles.length, 'items');
-          // Defer the store update to allow syncFilesToYjs to run first
           requestAnimationFrame(() => {
             useEditorStore.setState({ files: newFiles });
             isLocalChange = false;
           });
         } else {
+          console.log('[Sync] Skipping Yjs sync - no files in Yjs or unchanged');
           isLocalChange = false;
         }
       };
