@@ -44,6 +44,7 @@ interface SessionState {
   setCurrentUser: (user: User) => void;
   addUser: (user: User) => void;
   removeUser: (userId: string) => void;
+  setUsers: (users: User[]) => void;
   updateUserCursor: (userId: string, position: { line: number; ch: number }, selection?: { from: number; to: number }) => void;
   addAIBlock: (block: Omit<AIBlock, 'id' | 'createdAt'>) => AIBlock;
   updateAIBlock: (blockId: string, updates: Partial<AIBlock>) => void;
@@ -103,6 +104,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   removeUser: (userId) => {
     set({ users: get().users.filter(u => u.id !== userId) });
+  },
+
+  setUsers: (users) => {
+    set({ users });
   },
 
   updateUserCursor: (userId, position, selection) => {

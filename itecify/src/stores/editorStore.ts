@@ -16,9 +16,12 @@ interface EditorState {
   files: FileNode[];
   openFiles: string[];
   modifiedFiles: Set<string>;
+  isLoadingFiles: boolean;
+  currentProjectId: string | null;
+  editorSetContentFn: ((fileId: string, content: string) => void) | null;
   
   setActiveFile: (fileId: string) => void;
-  addFile: (file: Omit<FileNode, 'id'>, parentId?: string) => string;
+  addFile: (file: Omit<FileNode, 'id'>, parentId?: string, projectId?: string) => string;
   addFolder: (name: string, parentId?: string) => void;
   removeFile: (fileId: string) => void;
   renameFile: (fileId: string, newName: string) => void;
@@ -27,6 +30,9 @@ interface EditorState {
   closeFile: (fileId: string) => void;
   openFile: (fileId: string) => void;
   markModified: (fileId: string, modified: boolean) => void;
+  loadFilesFromProject: (projectId: string) => Promise<void>;
+  setCurrentProjectId: (projectId: string) => void;
+  setEditorSetContentFn: (fn: ((fileId: string, content: string) => void) | null) => void;
 }
 
 const defaultFiles: FileNode[] = [
@@ -133,6 +139,28 @@ export const useEditorStore = create<EditorState>()(
       files: defaultFiles,
       openFiles: ['index'],
       modifiedFiles: new Set(),
+      isLoadingFiles: false,
+      currentProjectId: null,
+      editorSetContentFn: null,
+
+      setCurrentProjectId: (projectId: string) => {
+        set({ currentProjectId: projectId });
+      },
+
+      setEditorSetContentFn: (fn) => {
+        set({ editorSetContentFn: fn });
+      },
+
+      loadFilesFromProject: async (projectId: string) => {
+        set({ isLoadingFiles: true, currentProjectId: projectId });
+        const files = await loadProjectFiles(projectId);
+        if (files.length > 0) {
+          set({ files, openFiles: files[0] ? [files[0].id] : [], activeFileId: files[0]?.id || null });
+        } else {
+          set({ files: defaultFiles, openFiles: ['index'], activeFileId: 'index' });
+        }
+        set({ isLoadingFiles: false });
+      },
 
       setActiveFile: (fileId) => {
         const openFiles = get().openFiles;
@@ -143,11 +171,25 @@ export const useEditorStore = create<EditorState>()(
         }
       },
 
-      addFile: (fileData, parentId) => {
+      addFile: (fileData, parentId, projectId?: string) => {
+        const state = get();
+        const effectiveProjectId = projectId || state.currentProjectId;
         const id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const file: FileNode = { ...fileData, id };
-        const newFiles = addFileToTree(get().files, file, parentId);
-        set({ files: newFiles, openFiles: [...get().openFiles, id] });
+        const newFiles = addFileToTree(state.files, file, parentId);
+        set({ files: newFiles, openFiles: [...state.openFiles, id] });
+        
+        if (effectiveProjectId) {
+          fetch(`${API_URL}/api/projects/${effectiveProjectId}/files`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('accessToken')}` },
+            body: JSON.stringify({
+              name: fileData.name,
+              content: fileData.content || '',
+              language: fileData.language || 'javascript',
+            }),
+          }).catch(err => console.error('Failed to save file:', err));
+        }
         return id;
       },
 
@@ -186,9 +228,25 @@ export const useEditorStore = create<EditorState>()(
       },
 
       updateFileContent: (fileId, content) => {
+        const state = get();
         set({
-          files: updateContentInTree(get().files, fileId, content),
+          files: updateContentInTree(state.files, fileId, content),
         });
+        
+        if (state.currentProjectId) {
+          const file = findFile(state.files, fileId);
+          if (file) {
+            fetch(`${API_URL}/api/projects/${state.currentProjectId}/files`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('accessToken')}` },
+              body: JSON.stringify({
+                name: file.name,
+                content: content,
+                language: file.language || 'javascript',
+              }),
+            }).catch(err => console.error('Failed to save file:', err));
+          }
+        }
       },
 
       toggleFolder: (folderId) => {
@@ -234,6 +292,32 @@ export const useEditorStore = create<EditorState>()(
     }
   )
 );
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
+export const loadProjectFiles = async (projectId: string): Promise<FileNode[]> => {
+  const token = localStorage.getItem('accessToken');
+  if (!token) return [];
+  
+  try {
+    const res = await fetch(`${API_URL}/api/projects/${projectId}/files`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    
+    return data.map((file: any) => ({
+      id: file.id,
+      name: file.name,
+      type: 'file',
+      language: file.language || 'javascript',
+      content: file.content || '',
+    }));
+  } catch {
+    return [];
+  }
+};
 
 function renameInTree(node: FileNode, fileId: string, newName: string): FileNode {
   if (node.id === fileId) {

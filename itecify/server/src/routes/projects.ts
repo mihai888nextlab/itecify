@@ -74,6 +74,9 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
             },
           },
         },
+        _count: {
+          select: { members: true },
+        },
       },
     });
 
@@ -102,15 +105,6 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
 
     if (!project) {
       return reply.code(404).send({ error: 'Project not found' });
-    }
-
-    // Check access
-    const isOwner = project.ownerId === request.user!.id;
-    const isMember = project.members.some((m) => m.userId === request.user!.id);
-    const isPublic = project.isPublic;
-
-    if (!isOwner && !isMember && !isPublic) {
-      return reply.code(403).send({ error: 'Access denied' });
     }
 
     return project;
@@ -182,6 +176,7 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
 
     const project = await fastify.prisma.project.findUnique({
       where: { id },
+      include: { members: true },
     });
 
     if (!project) {
@@ -281,6 +276,72 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     ];
 
     return collaborators;
+  });
+
+  // Get project files
+  fastify.get('/:id/files', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = await fastify.prisma.project.findUnique({ where: { id } });
+
+    if (!project) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    const files = await fastify.prisma.projectFile.findMany({
+      where: { projectId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return files;
+  });
+
+  // Create or update a file
+  fastify.put('/:id/files', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { name, content, language } = request.body as { name: string; content: string; language: string };
+    const project = await fastify.prisma.project.findUnique({ where: { id } });
+
+    if (!project) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    let file = await fastify.prisma.projectFile.findFirst({
+      where: { projectId: id, name },
+    });
+
+    if (file) {
+      file = await fastify.prisma.projectFile.update({
+        where: { id: file.id },
+        data: { content, language },
+      });
+    } else {
+      file = await fastify.prisma.projectFile.create({
+        data: {
+          projectId: id,
+          name,
+          content,
+          language,
+        },
+      });
+    }
+
+    return file;
+  });
+
+  // Delete a file
+  fastify.delete('/:id/files/:fileId', async (request, reply) => {
+    const { id, fileId } = request.params as { id: string; fileId: string };
+    const project = await fastify.prisma.project.findUnique({ where: { id } });
+
+    if (!project) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    await fastify.prisma.projectFile.delete({
+      where: { id: fileId },
+    });
+
+    return { message: 'File deleted' };
   });
 };
 

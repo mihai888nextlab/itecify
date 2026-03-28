@@ -93,8 +93,12 @@ function WorkspacePageContent() {
     fetch(`${API_URL}/api/projects/${projectId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch project');
+      .then(async res => {
+        if (!res.ok) {
+          if (res.status === 403) throw new Error('Access denied. You don\'t have permission to view this project.');
+          if (res.status === 404) throw new Error('Project not found.');
+          throw new Error('Failed to fetch project');
+        }
         return res.json();
       })
       .then(data => {

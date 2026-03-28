@@ -55,14 +55,26 @@ const awarenessTheme = EditorView.theme({
     padding: '2px 6px',
     borderRadius: '4px',
     fontSize: '10px',
-    fontFamily: 'JetBrains Mono, monospace',
+    fontFamily: "'JetBrains Mono', monospace",
     whiteSpace: 'nowrap',
+    opacity: '1 !important',
+    visibility: 'visible !important',
+    pointerEvents: 'none',
+  },
+  '.cm-ySelection': {
+    opacity: '1 !important',
+  },
+  '.cm-ySelectionCaretDot': {
+    display: 'none',
   },
 });
 
 interface CodeEditorProps {
   projectId: string;
   user: { id: string; name: string; color: string };
+  onUsersChange?: (users: User[]) => void;
+  onConnectionChange?: (connected: boolean) => void;
+  onSetContent?: (fn: (fileId: string, content: string) => void) => void;
 }
 
 function getLanguageExtension(language: string): Extension {
@@ -76,15 +88,49 @@ function getLanguageExtension(language: string): Extension {
   }
 }
 
-export function CodeEditor({ projectId, user }: CodeEditorProps) {
+export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent }: CodeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const providerRef = useRef<any>(null);
   const ydocRef = useRef<any>(null);
+  const ytextMapRef = useRef<Map<string, any>>(new Map());
+  const onUsersChangeRef = useRef(onUsersChange);
+  const onConnectionChangeRef = useRef(onConnectionChange);
+  const onSetContentRef = useRef(onSetContent);
+  const editorSetContentRef = useRef<((fileId: string, content: string) => void) | null>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
   const [isCollabReady, setIsCollabReady] = useState(false);
   const { aiBlocks, updateAIBlock, removeAIBlock } = useSessionStore();
   const { activeFileId, files, updateFileContent, openFile } = useEditorStore();
+
+  onUsersChangeRef.current = onUsersChange;
+  onConnectionChangeRef.current = onConnectionChange;
+  onSetContentRef.current = onSetContent;
+
+  useEffect(() => {
+    if (activeFileId && ytextMapRef.current.size > 0) {
+      const findFile = (nodes: FileNode[]): FileNode | null => {
+        for (const n of nodes) {
+          if (n.id === activeFileId) return n;
+          if (n.children) {
+            const f = findFile(n.children);
+            if (f) return f;
+          }
+        }
+        return null;
+      };
+      const file = findFile(files);
+      if (file && file.content !== undefined) {
+        const ytext = ytextMapRef.current.get(file.id);
+        if (ytext && ytext.toString() !== file.content) {
+          ytext.delete(0, ytext.length);
+          if (file.content) {
+            ytext.insert(0, file.content);
+          }
+        }
+      }
+    }
+  }, [files, activeFileId]);
 
   const currentFile = useMemo(() => {
     const findFile = (nodes: FileNode[], id: string): FileNode | null => {
@@ -109,6 +155,45 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
     let ytextMap = new Map<string, any>();
     let yFilesMap: any = null;
     let isLocalChange = false;
+    ytextMapRef.current = ytextMap;
+
+    const setEditorContent = (fileId: string, content: string) => {
+      const ytextKey = `file:${fileId}`;
+      console.log('[SETEDITOR] fileId:', fileId, 'ytextKey:', ytextKey);
+      console.log('[SETEDITOR] Content to set:');
+      console.log(content);
+      
+      let ytext = ytextMap.get(ytextKey);
+      console.log('[SETEDITOR] ytext found with key', ytextKey, ':', !!ytext, 'current length:', ytext?.length);
+      
+      if (!ytext && ydoc) {
+        ytext = ydoc.getText(ytextKey);
+        ytextMap.set(ytextKey, ytext);
+        console.log('[SETEDITOR] Created new ytext with key:', ytextKey);
+      }
+      
+      if (ytext) {
+        const oldLen = ytext.length;
+        isLocalChange = true;
+        if (oldLen > 0) {
+          ytext.delete(0, oldLen);
+        }
+        ytext.insert(0, content);
+        isLocalChange = false;
+        console.log('[SETEDITOR] Updated ytext, new length:', ytext.length);
+        console.log('[SETEDITOR] Ytext content now:');
+        console.log(ytext.toString());
+      } else {
+        console.log('[SETEDITOR] ERROR: No ytext found!');
+      }
+    };
+    
+    editorSetContentRef.current = setEditorContent;
+    
+    if (onSetContentRef.current) {
+      console.log('[SETEDITOR] Registering setEditorContent via onSetContentRef');
+      onSetContentRef.current(setEditorContent);
+    }
 
     const initEditor = async () => {
       const Y = await import('yjs');
@@ -120,52 +205,51 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
 
       yFilesMap = ydoc.getMap('files');
 
-      yFilesMap.observe((event: any) => {
+      const syncFromYjs = () => {
         if (isLocalChange) return;
 
         const editorStore = useEditorStore.getState();
-        const newFiles: FileNode[] = [];
+        const yjsFiles: FileNode[] = [];
 
         yFilesMap.forEach((value: any, key: string) => {
           if (key === '_meta') return;
           if (value === null) return;
           const fileData = typeof value === 'string' ? JSON.parse(value) : value;
-          newFiles.push(fileData);
+          yjsFiles.push(fileData);
         });
 
-        if (event.changes.keys) {
-          const deletedKeys: string[] = [];
-          event.changes.keys.forEach((change: any, key: string) => {
-            if (change.action === 'delete' && key !== '_meta') {
-              deletedKeys.push(key);
-            }
+        const localIds = new Set<string>();
+        const collectLocalIds = (files: FileNode[]) => {
+          files.forEach(f => {
+            localIds.add(f.id);
+            if (f.children) collectLocalIds(f.children);
           });
-          
-          if (deletedKeys.length > 0) {
-            const idsToRemove = new Set<string>();
-            const collectIds = (fileId: string) => {
-              idsToRemove.add(fileId);
-              const file = editorStore.files.find(f => f.id === fileId);
-              if (file?.children) {
-                file.children.forEach((child: FileNode) => collectIds(child.id));
-              }
-            };
-            deletedKeys.forEach(collectIds);
-            
-            const filteredFiles = removeFilesFromTree(editorStore.files, idsToRemove);
-            useEditorStore.setState({ files: filteredFiles });
-            return;
-          }
+        };
+        collectLocalIds(editorStore.files);
+
+        const yjsIds = new Set(yjsFiles.map(f => f.id));
+        const localFilesHaveContent = editorStore.files.some(f => f.content && f.content.length > 0);
+        
+        if (localFilesHaveContent && yjsFiles.length === 0 && localIds.size > 0) {
+          return;
         }
 
-        const needsUpdate = newFiles.length !== editorStore.files.length || 
-          !newFiles.every(f => editorStore.files.some(lf => lf.id === f.id));
+        let needsUpdate = false;
+        const allIds = new Set([...localIds, ...yjsFiles.map(f => f.id)]);
+        
+        allIds.forEach(id => {
+          const inLocal = editorStore.files.some(f => f.id === id);
+          const inYjs = yjsFiles.some(f => f.id === id);
+          if (inLocal !== inYjs) needsUpdate = true;
+        });
 
-        if (needsUpdate) {
-          const currentFiles = editorStore.files;
-          const mergedFiles = mergeFiles(currentFiles, newFiles);
-          useEditorStore.setState({ files: mergedFiles });
+        if (needsUpdate || editorStore.files.length !== yjsFiles.length) {
+          useEditorStore.setState({ files: yjsFiles });
         }
+      };
+
+      yFilesMap.observe((event: any) => {
+        syncFromYjs();
       });
 
       const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234`;
@@ -176,35 +260,48 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
 
       providerRef.current = provider;
 
-      provider.awareness.setLocalStateField('user', {
-        name: user.name,
-        color: user.color,
-      });
-
-      provider.awareness.on('change', () => {
-        const states = provider.awareness.getStates();
-        const users: User[] = [];
-        states.forEach((state: any, clientId: number) => {
-          if (state.user && clientId !== ydoc.clientID) {
-            const existing = users.find(u => u.name === state.user.name);
-            if (!existing) {
-              users.push({
-                id: String(clientId),
-                name: state.user.name || 'Anonymous',
-                color: state.user.color || '#3b82f6',
-                role: 'human',
-                cursorPosition: state.cursor,
-              });
-            }
-          }
+      if (provider.awareness) {
+        provider.awareness.setLocalStateField('user', {
+          name: user.name,
+          color: user.color,
         });
-        setConnectedUsers(users);
+
+        provider.awareness.on('change', () => {
+          const states = provider.awareness?.getStates();
+          if (!states) return;
+          const users: User[] = [];
+          const localClientId = ydoc?.clientID;
+          states.forEach((state: any, clientId: number) => {
+            if (state.user && localClientId !== undefined && clientId !== localClientId) {
+              const existing = users.find(u => u.name === state.user.name);
+              if (!existing) {
+                users.push({
+                  id: String(clientId),
+                  name: state.user.name || 'Anonymous',
+                  color: state.user.color || '#3b82f6',
+                  role: 'human',
+                  cursorPosition: state.cursor,
+                });
+              }
+            }
+          });
+          setConnectedUsers(users);
+          onUsersChangeRef.current?.(users);
+        });
+      }
+
+      provider.on('status', ({ status }: { status: string }) => {
+        onConnectionChangeRef.current?.(status === 'connected');
       });
 
       const syncFilesToYjs = () => {
         const editorFiles = useEditorStore.getState().files;
+        
+        if (editorFiles.length === 0) return;
+        
         const currentIds = new Set<string>();
         
+        isLocalChange = true;
         editorFiles.forEach(file => {
           syncFileToYjs(file, yFilesMap);
           collectIds(file, currentIds);
@@ -212,11 +309,11 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
         
         yFilesMap.forEach((value: any, key: string) => {
           if (key !== '_meta' && !currentIds.has(key)) {
-            isLocalChange = true;
             yFilesMap.delete(key);
-            isLocalChange = false;
           }
         });
+        
+        setTimeout(() => { isLocalChange = false; }, 100);
       };
 
       const collectIds = (file: FileNode, ids: Set<string>) => {
@@ -229,34 +326,32 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
       const syncFileToYjs = (file: FileNode, yMap: any) => {
         const existing = yMap.get(file.id);
         if (!existing || JSON.stringify(existing) !== JSON.stringify(file)) {
-          isLocalChange = true;
           yMap.set(file.id, file);
-          isLocalChange = false;
         }
         if (file.children) {
           file.children.forEach((child: FileNode) => syncFileToYjs(child, yMap));
         }
       };
 
-      const unsubscribe = useEditorStore.subscribe(
-        (state, prevState) => {
-          if (state.files !== prevState.files) {
-            syncFilesToYjs();
-          }
-        }
-      );
-
       const createExtensions = (fileId: string) => {
-        let ytext = ytextMap.get(fileId);
+        let ytext = ytextMap.get(`file:${fileId}`);
         if (!ytext) {
           ytext = ydoc.getText(`file:${fileId}`);
-          ytextMap.set(fileId, ytext);
+          ytextMap.set(`file:${fileId}`, ytext);
         }
         
         const updateListener = EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const newContent = update.state.doc.toString();
             updateFileContent(fileId, newContent);
+          }
+          if (update.selectionSet && provider?.awareness) {
+            const selection = update.state.selection.main;
+            provider.awareness.setLocalStateField('cursor', {
+              anchor: selection.anchor,
+              head: selection.head,
+              user: { name: user.name, color: user.color },
+            });
           }
         });
         
@@ -272,6 +367,16 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
             return null;
           };
           return find(useEditorStore.getState().files, fileId);
+        })();
+        
+        const yCollabExtension = (() => {
+          if (!provider.awareness) return [];
+          try {
+            return yCollab(ytext, provider.awareness);
+          } catch (e) {
+            console.warn('yCollab initialization failed, disabling remote cursors:', e);
+            return [];
+          }
         })();
         
         return [
@@ -291,14 +396,14 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
           awarenessTheme,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           file?.language === 'python' ? python() : javascript({ typescript: file?.language === 'typescript' }),
-          yCollab(ytext, provider.awareness),
+          yCollabExtension,
           updateListener,
         ];
       };
 
       const activeFile = useEditorStore.getState().activeFileId;
       const initialFileId = activeFile || 'index';
-      let initialYText = ytextMap.get(initialFileId);
+      let initialYText = ytextMap.get(`file:${initialFileId}`);
       
       const findFileContent = (nodes: FileNode[], id: string): string | null => {
         for (const n of nodes) {
@@ -313,7 +418,7 @@ export function CodeEditor({ projectId, user }: CodeEditorProps) {
       
       if (!initialYText) {
         initialYText = ydoc.getText(`file:${initialFileId}`);
-        ytextMap.set(initialFileId, initialYText);
+        ytextMap.set(`file:${initialFileId}`, initialYText);
         
         if (initialYText.length === 0) {
           const storedContent = findFileContent(useEditorStore.getState().files, initialFileId);
@@ -344,30 +449,7 @@ greet('iTEC 2026');
         parent: editorRef.current,
       });
 
-      viewRef.current = view;
-
-      provider.on('synced', () => {
-        setIsCollabReady(true);
-        
-        const editorFiles = useEditorStore.getState().files;
-        yFilesMap.forEach((value: any, key: string) => {
-          if (key === '_meta') return;
-          const fileData = typeof value === 'string' ? JSON.parse(value) : value;
-          const existsLocally = editorFiles.some(f => f.id === fileData.id);
-          if (!existsLocally) {
-            useEditorStore.getState().addFile({
-              name: fileData.name,
-              type: fileData.type,
-              language: fileData.language,
-              content: fileData.content || '',
-            });
-          }
-        });
-      });
-
-      if (initialYText.length > 0) {
-        setIsCollabReady(true);
-      }
+      setIsCollabReady(true);
 
       let currentFileId = initialFileId;
 
@@ -376,29 +458,32 @@ greet('iTEC 2026');
           if (state.activeFileId !== prevState.activeFileId && state.activeFileId) {
             const newFileId = state.activeFileId;
             
-            let newYText = ytextMap.get(newFileId);
+            let newYText = ytextMap.get(`file:${newFileId}`);
             if (!newYText) {
               newYText = ydoc.getText(`file:${newFileId}`);
-              ytextMap.set(newFileId, newYText);
-              
-              if (newYText.length === 0) {
-                const file = (() => {
-                  const find = (nodes: FileNode[], id: string): FileNode | null => {
-                    for (const n of nodes) {
-                      if (n.id === id) return n;
-                      if (n.children) {
-                        const f = find(n.children, id);
-                        if (f) return f;
-                      }
-                    }
-                    return null;
-                  };
-                  return find(state.files, newFileId);
-                })();
-                if (file?.content) {
-                  newYText.insert(0, file.content);
+              ytextMap.set(`file:${newFileId}`, newYText);
+            }
+            
+            const findFileContent = (nodes: FileNode[], id: string): string | null => {
+              for (const n of nodes) {
+                if (n.id === id) return n.content || null;
+                if (n.children) {
+                  const f = findFileContent(n.children, id);
+                  if (f !== null) return f;
                 }
               }
+              return null;
+            };
+            
+            const storeContent = findFileContent(state.files, newFileId);
+            
+            if (newYText.length === 0 && storeContent) {
+              newYText.insert(0, storeContent);
+            } else if (storeContent && newYText.toString() !== storeContent) {
+              isLocalChange = true;
+              newYText.delete(0, newYText.length);
+              newYText.insert(0, storeContent);
+              isLocalChange = false;
             }
 
             currentFileId = newFileId;
@@ -414,7 +499,6 @@ greet('iTEC 2026');
       );
 
       return () => {
-        unsubscribe();
         unsubscribeFileChange();
         view?.destroy();
         provider?.destroy();
