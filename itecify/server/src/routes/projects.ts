@@ -5,6 +5,7 @@ const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
   isPublic: z.boolean().optional(),
+  containerImage: z.string().optional(),
 });
 
 const updateProjectSchema = z.object({
@@ -62,6 +63,7 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         description: body.description,
         isPublic: body.isPublic ?? false,
         ownerId: request.user!.id,
+        containerImage: body.containerImage ?? 'node:20',
       },
       include: {
         owner: {

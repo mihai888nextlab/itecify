@@ -487,16 +487,68 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
 
   const handleStop = () => { setExecuting(false); addTermLine('err', '✗ Execution stopped by user'); };
 
-  const handleTermCmd = (cmd: string) => {
+  const handleTermCmd = async (cmd: string) => {
     addTermLine('prompt', `$ ${cmd}`);
+    
     if (cmd === 'help') {
-      setTerminalLines(prev => [...prev, { type: 'info', text: 'Commands: help, clear, status, run' }]);
-    } else if (cmd === 'clear') {
+      setTerminalLines(prev => [...prev, { type: 'info', text: 'Available commands:' }]);
+      setTerminalLines(prev => [...prev, { type: 'info', text: '  help     - Show this help' }]);
+      setTerminalLines(prev => [...prev, { type: 'info', text: '  clear    - Clear terminal' }]);
+      setTerminalLines(prev => [...prev, { type: 'info', text: '  run      - Run current file' }]);
+      setTerminalLines(prev => [...prev, { type: 'info', text: '  status   - Show status' }]);
+      setTerminalLines(prev => [...prev, { type: 'info', text: '  npm, npx, git, node, python, etc. - Run shell commands' }]);
+      return;
+    }
+    
+    if (cmd === 'clear') {
       setTerminalLines([]);
-    } else if (cmd === 'run') {
+      return;
+    }
+    
+    if (cmd === 'run') {
       handleRun();
-    } else if (cmd === 'status') {
+      return;
+    }
+    
+    if (cmd === 'status') {
       setTerminalLines(prev => [...prev, { type: 'info', text: `Status: ${isExecuting ? 'Running' : 'Idle'}` }]);
+      return;
+    }
+    
+    setExecuting(true);
+    
+    try {
+      const token = localStorage.getItem('accessToken');
+      const termSessionId = sessionId || 'default';
+      
+      const res = await fetch(`${API_URL}/api/terminal/execute`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` })
+        },
+        body: JSON.stringify({ 
+          command: cmd,
+          sessionId: termSessionId 
+        }),
+      });
+      
+      const result = await res.json();
+      
+      if (result.success) {
+        if (result.output) {
+          result.output.split('\n').forEach((line: string) => {
+            addTermLine('out', line);
+          });
+        }
+      } else {
+        addTermLine('err', result.error || 'Command failed');
+      }
+    } catch (err: any) {
+      console.error('Terminal error:', err);
+      addTermLine('err', `Connection error`);
+    } finally {
+      setExecuting(false);
     }
   };
 

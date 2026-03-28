@@ -60,15 +60,16 @@ model Session {
 }
 
 model Project {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
-  ownerId     String
-  owner       User     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  isPublic    Boolean  @default(false)
-  settings    Json     @default("{}")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  ownerId         String
+  owner           User     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  isPublic        Boolean  @default(false)
+  settings        Json     @default("{}")
+  containerImage  String   @default("node:20")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   members     ProjectMember[]
   yjsStates   YjsState[]
