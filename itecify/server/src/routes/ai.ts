@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { generateCode, analyzeCode } from '../services/groqService.js';
+import { generateCode, analyzeCode, copilotSuggest } from '../services/groqService.js';
 
 const generateSchema = z.object({
   code: z.string(),
@@ -13,6 +13,13 @@ const analyzeSchema = z.object({
   code: z.string(),
   language: z.string().default('javascript'),
   task: z.enum(['review', 'fix', 'optimize', 'explain']).default('review'),
+});
+
+const copilotSchema = z.object({
+  code: z.string(),
+  language: z.string().default('javascript'),
+  filename: z.string().optional(),
+  cursorContext: z.string().optional(),
 });
 
 const aiRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
@@ -93,6 +100,50 @@ const aiRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B', description: 'Good balance' },
       ],
     };
+  });
+
+  fastify.post('/copilot', async (request, reply) => {
+    const apiKey = process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      return reply.code(500).send({
+        success: false,
+        error: 'AI service not configured. Please set GROQ_API_KEY in environment.',
+      });
+    }
+
+    try {
+      const body = copilotSchema.parse(request.body);
+      
+      const suggestions = await copilotSuggest(
+        apiKey,
+        body.code,
+        body.language,
+        body.filename,
+        body.cursorContext
+      );
+
+      const topSuggestion = suggestions.length > 0 ? suggestions[0] : null;
+
+      return {
+        success: true,
+        intent: topSuggestion?.intent || 'Code looks good!',
+        type: topSuggestion?.type || null,
+        suggestion: topSuggestion?.code ? {
+          code: topSuggestion.code,
+          type: topSuggestion.type,
+          explanation: topSuggestion.explanation,
+          severity: topSuggestion.severity,
+        } : null,
+        allSuggestions: suggestions,
+      };
+    } catch (error: any) {
+      fastify.log.error('AI copilot error:', error);
+      return reply.code(500).send({
+        success: false,
+        error: error.message || 'AI copilot analysis failed',
+      });
+    }
   });
 };
 

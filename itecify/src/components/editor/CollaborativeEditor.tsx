@@ -64,10 +64,88 @@ const iTECifyTheme = EditorView.theme({
     fontWeight: 'bold',
     fontStyle: 'italic',
   },
+  '.cm-ghost-text': {
+    opacity: 0.6,
+    fontStyle: 'italic',
+    color: '#a855f7',
+    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+    borderRadius: '3px',
+    padding: '0 2px',
+  },
 });
 
 const aiSuggestionMark = Decoration.mark({ class: 'cm-ai-suggestion' });
 const aiHeaderMark = Decoration.mark({ class: 'cm-ai-header' });
+const ghostTextMark = Decoration.mark({ class: 'cm-ghost-text' });
+
+interface GhostTextState {
+  text: string;
+  from: number;
+  to: number;
+}
+
+const setGhostText = StateEffect.define<GhostTextState | null>();
+const clearGhostText = StateEffect.define<void>();
+
+const setAICursor = StateEffect.define<{ position: number } | null>();
+
+const aiCursorField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(setAICursor)) {
+        decorations = Decoration.none;
+        if (effect.value !== null) {
+          decorations = decorations.update({
+            add: [{
+              from: effect.value.position,
+              to: effect.value.position,
+              value: Decoration.line({
+                attributes: {
+                  class: 'cm-ai-cursor-line',
+                  style: 'position: relative;',
+                },
+              }),
+            }],
+          });
+        }
+      }
+    }
+    return decorations;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
+
+const ghostTextField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(setGhostText)) {
+        decorations = Decoration.none;
+        if (effect.value) {
+          const { text, from } = effect.value;
+          decorations = decorations.update({
+            add: [{
+              from,
+              to: from + text.length,
+              value: ghostTextMark,
+            }],
+          });
+        }
+      } else if (effect.is(clearGhostText)) {
+        decorations = Decoration.none;
+      }
+    }
+    return decorations;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
 
 const addAIHighlight = StateEffect.define<{ from: number; to: number; isHeader?: boolean }>();
 const removeAIHighlights = StateEffect.define<void>();
@@ -105,6 +183,11 @@ interface CodeEditorProps {
   onAIAccept?: (fn: () => void) => void;
   onAIReject?: (fn: () => void) => void;
   onHasAISuggestion?: (has: boolean) => void;
+  onAICopilotEnabled?: (enabled: boolean) => void;
+  onGhostText?: (fn: (text: string, from: number) => void) => void;
+  onClearGhostText?: (fn: () => void) => void;
+  onCursorMove?: (fn: (position: { line: number; ch: number }) => void) => void;
+  onSetAICursor?: (fn: (position: number | null) => void) => void;
 }
 
 function getLanguageExtension(language: string): Extension {
@@ -118,7 +201,7 @@ function getLanguageExtension(language: string): Extension {
   }
 }
 
-export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent, onChatMessages, onAddChatMessage, onInsertAIContent, onAIAccept, onAIReject, onHasAISuggestion }: CodeEditorProps) {
+export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent, onChatMessages, onAddChatMessage, onInsertAIContent, onAIAccept, onAIReject, onHasAISuggestion, onAICopilotEnabled, onGhostText, onClearGhostText, onCursorMove, onSetAICursor }: CodeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const providerRef = useRef<any>(null);
@@ -133,6 +216,11 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   const onAIAcceptRef = useRef(onAIAccept);
   const onAIRejectRef = useRef(onAIReject);
   const onHasAISuggestionRef = useRef(onHasAISuggestion);
+  const onAICopilotEnabledRef = useRef(onAICopilotEnabled);
+  const onGhostTextRef = useRef(onGhostText);
+  const onClearGhostTextRef = useRef(onClearGhostText);
+  const onCursorMoveRef = useRef(onCursorMove);
+  const onSetAICursorRef = useRef(onSetAICursor);
   const editorSetContentRef = useRef<((fileId: string, content: string) => void) | null>(null);
   const aiSuggestionRef = useRef<{ from: number; to: number } | null>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
@@ -151,6 +239,11 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   onAIAcceptRef.current = onAIAccept;
   onAIRejectRef.current = onAIReject;
   onHasAISuggestionRef.current = onHasAISuggestion;
+  onAICopilotEnabledRef.current = onAICopilotEnabled;
+  onGhostTextRef.current = onGhostText;
+  onClearGhostTextRef.current = onClearGhostText;
+  onCursorMoveRef.current = onCursorMove;
+  onSetAICursorRef.current = onSetAICursor;
 
   useEffect(() => {
     const handleError = (event: ErrorEvent) => {
@@ -524,6 +617,8 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
           iTECifyTheme,
           yRemoteSelectionsTheme,
           aiHighlightsField,
+          ghostTextField,
+          aiCursorField,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           file?.language === 'python' ? python() : javascript({ typescript: file?.language === 'typescript' }),
           updateListener,
@@ -709,6 +804,46 @@ greet('iTEC 2026');
       }
       if (onAIRejectRef.current) {
         onAIRejectRef.current(rejectAISuggestion);
+      }
+
+      const showGhostText = (text: string, from: number) => {
+        if (view) {
+          view.dispatch({
+            effects: [setGhostText.of({ text, from, to: from + text.length })],
+          });
+          console.log('[GhostText] Applied at position:', from);
+        }
+      };
+      
+      const hideGhostText = () => {
+        if (view) {
+          view.dispatch({
+            effects: [clearGhostText.of()],
+          });
+        }
+      };
+      
+      if (onGhostTextRef.current) {
+        onGhostTextRef.current(showGhostText);
+      }
+      if (onClearGhostTextRef.current) {
+        onClearGhostTextRef.current(hideGhostText);
+      }
+      if (onAICopilotEnabledRef.current) {
+        onAICopilotEnabledRef.current(true);
+      }
+      
+      const setAICursorPosition = (position: number | null) => {
+        if (view) {
+          view.dispatch({
+            effects: [setAICursor.of(position !== null ? { position } : null)],
+          });
+          console.log('[AI Cursor] Position set to:', position);
+        }
+      };
+      
+      if (onSetAICursorRef.current) {
+        onSetAICursorRef.current(setAICursorPosition);
       }
 
       setIsCollabReady(true);

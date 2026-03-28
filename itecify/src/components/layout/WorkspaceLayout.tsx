@@ -3,6 +3,8 @@ import { CollaborativeEditor } from '@/components/editor/CollaborativeEditor';
 import { PreviewPanel } from '@/components/preview/PreviewPanel';
 import { FileTree } from '@/components/explorer/FileTree';
 import { CustomAgentManager } from '@/components/agents/CustomAgentManager';
+import { IntentBubble, SuggestionBlock } from '@/components/ai';
+import { AICopilotProvider, useAICopilot } from '@/contexts/AICopilotContext';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEditorStore } from '@/stores/editorStore';
 import * as Y from 'yjs';
@@ -556,6 +558,63 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const handleHasAISuggestion = React.useCallback((has: boolean) => {
     setHasAISuggestion(has);
   }, []);
+  
+  const [aiCopilotEnabled, setAiCopilotEnabled] = useState(false);
+  const [aiCopilotIntent, setAiCopilotIntent] = useState('');
+  const [aiCopilotSuggestion, setAiCopilotSuggestion] = useState<{
+    id: string;
+    code: string;
+    from: number;
+    to: number;
+    type: 'refactor' | 'optimize' | 'fix' | 'explain';
+    intent: string;
+  } | null>(null);
+  const ghostTextRef = React.useRef<((text: string, from: number) => void) | null>(null);
+  const clearGhostTextRef = React.useRef<(() => void) | null>(null);
+  const cursorMoveRef = React.useRef<((position: { line: number; ch: number }) => void) | null>(null);
+  
+  const enableAICopilot = useCallback(() => {
+    setAiCopilotEnabled(true);
+    if (addChatMessageRef.current) {
+      addChatMessageRef.current('ai', '✦ AI Co-Pilot enabled - watching your code');
+    }
+    if (setAICursorRef.current) {
+      setAICursorRef.current(0);
+    }
+  }, []);
+  
+  const disableAICopilot = useCallback(() => {
+    setAiCopilotEnabled(false);
+    setAiCopilotIntent('');
+    setAiCopilotSuggestion(null);
+    if (clearGhostTextRef.current) {
+      clearGhostTextRef.current();
+    }
+    if (setAICursorRef.current) {
+      setAICursorRef.current(null);
+    }
+    if (addChatMessageRef.current) {
+      addChatMessageRef.current('ai', '✦ AI Co-Pilot disabled');
+    }
+  }, []);
+  
+  const handleGhostText = React.useCallback((fn: (text: string, from: number) => void) => {
+    ghostTextRef.current = fn;
+  }, []);
+  
+  const handleClearGhostText = React.useCallback((fn: () => void) => {
+    clearGhostTextRef.current = fn;
+  }, []);
+  
+  const handleAICopilotEnabled = React.useCallback((enabled: boolean) => {
+    console.log('[Workspace] AI Copilot registered, enabled:', enabled);
+  }, []);
+  
+  const setAICursorRef = React.useRef<((position: number | null) => void) | null>(null);
+  
+  const handleSetAICursor = React.useCallback((fn: (position: number | null) => void) => {
+    setAICursorRef.current = fn;
+  }, []);
 
   const { isExecuting, setExecuting, settings, setUsers, setConnected } = useSessionStore();
   const { activeFileId, files, openFile, closeFile, loadFilesFromProject, addFile, updateFileContent, setCurrentProjectId, editorSetContentFn, setEditorSetContentFn, addFolder, removeFile, renameFile, moveFile } = useEditorStore();
@@ -662,8 +721,12 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
       }
     });
     
+    if (aiCopilotEnabled) {
+      addUser({ id: 'ai-copilot', name: 'AI Co-Pilot', color: C.purple, role: 'ai', isSelf: false });
+    }
+    
     return users;
-  }, [project, currentUser, connectedUsers]);
+  }, [project, currentUser, connectedUsers, aiCopilotEnabled]);
 
   const findFileInTree = (nodes: any[], id: string): any => {
     for (const node of nodes) {
@@ -745,6 +808,80 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
 
   const allFiles = getAllFiles(files);
   const currentFile = activeFileId ? findFileInTree(files, activeFileId) : null;
+
+  const [aiLastTrigger, setAiLastTrigger] = useState(Date.now());
+
+  React.useEffect(() => {
+    if (!aiCopilotEnabled || !currentFile) return;
+
+    const triggerAI = async () => {
+      const timeSinceLastTrigger = Date.now() - aiLastTrigger;
+      if (timeSinceLastTrigger < 3000) return;
+      
+      const code = currentFile.content || '';
+      if (!code.trim()) {
+        setAiCopilotIntent('');
+        return;
+      }
+
+      setAiLastTrigger(Date.now());
+      setAiCopilotIntent('Analyzing code...');
+
+      if (setAICursorRef.current) {
+        setAICursorRef.current(0);
+      }
+
+      try {
+        const res = await fetch(`/api/ai/copilot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectId: sessionId,
+            code: code,
+            cursorPosition: { line: 1, ch: 0 },
+            language: currentFile.language || 'javascript',
+          }),
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`AI request failed: ${res.status} - ${errorText}`);
+        }
+
+        const data = await res.json();
+
+        if (data.suggestion && data.suggestion.code) {
+          setAiCopilotIntent(data.intent);
+          setAiCopilotSuggestion({
+            id: `suggestion-${Date.now()}`,
+            code: data.suggestion.code,
+            from: data.suggestion.from || 0,
+            to: data.suggestion.to || 0,
+            type: data.suggestion.type || 'fix',
+            intent: data.intent,
+          });
+
+          if (ghostTextRef.current && data.suggestion.from !== undefined) {
+            ghostTextRef.current(data.suggestion.code, data.suggestion.from);
+          }
+
+          if (setAICursorRef.current && data.suggestion.from !== undefined) {
+            setAICursorRef.current(data.suggestion.from);
+          }
+        } else {
+          setAiCopilotIntent('');
+          setAiCopilotSuggestion(null);
+        }
+      } catch (error: any) {
+        console.error('[AI Co-Pilot] Error:', error);
+        setAiCopilotIntent('');
+      }
+    };
+
+    const debounceTimeout = setTimeout(triggerAI, 2000);
+
+    return () => clearTimeout(debounceTimeout);
+  }, [aiCopilotEnabled, currentFile?.content, aiLastTrigger, currentFile?.language]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -1088,6 +1225,36 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
             ))}
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {currentFile && (
+              <button
+                onClick={() => {
+                  if (aiCopilotEnabled) {
+                    disableAICopilot();
+                  } else {
+                    enableAICopilot();
+                  }
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  backgroundColor: aiCopilotEnabled ? `${C.purple}20` : 'transparent',
+                  border: `1px solid ${aiCopilotEnabled ? C.purple : C.border}`,
+                  borderRadius: 6,
+                  padding: '0 10px',
+                  height: 28,
+                  fontFamily: "'Syne', sans-serif",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: aiCopilotEnabled ? C.purple : C.muted,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <Bot size={14} />
+                AI Co-Pilot {aiCopilotEnabled ? 'ON' : 'OFF'}
+              </button>
+            )}
             <IconButton title="AI Agents" onClick={() => setShowAgentManager(true)}>
               <Wand2 size={14} />
             </IconButton>
@@ -1364,6 +1531,10 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                     onAIAccept={handleAIAccept}
                     onAIReject={handleAIReject}
                     onHasAISuggestion={handleHasAISuggestion}
+                    onAICopilotEnabled={handleAICopilotEnabled}
+                    onGhostText={handleGhostText}
+                    onClearGhostText={handleClearGhostText}
+                    onSetAICursor={handleSetAICursor}
                   />
                 ) : (
                   <WelcomeScreen 
@@ -1371,6 +1542,37 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                     onNewFolder={() => { setShowNewFolderInput(true); setActiveRail('files'); }}
                     onOpenSettings={() => {}}
                   />
+                )}
+                
+                {aiCopilotEnabled && (
+                  <>
+                    <IntentBubble
+                      intent={aiCopilotIntent}
+                      isVisible={!!aiCopilotIntent}
+                    />
+                    <SuggestionBlock
+                      suggestion={aiCopilotSuggestion}
+                      onAccept={() => {
+                        if (aiCopilotSuggestion && insertAIContentRef.current) {
+                          insertAIContentRef.current(aiCopilotSuggestion.code);
+                          setAiCopilotSuggestion(null);
+                          setAiCopilotIntent('');
+                        }
+                      }}
+                      onReject={() => {
+                        setAiCopilotSuggestion(null);
+                        setAiCopilotIntent('');
+                        if (clearGhostTextRef.current) {
+                          clearGhostTextRef.current();
+                        }
+                      }}
+                      onModify={(code) => {
+                        if (aiCopilotSuggestion) {
+                          setAiCopilotSuggestion({ ...aiCopilotSuggestion, code });
+                        }
+                      }}
+                    />
+                  </>
                 )}
                 
                 {hasAISuggestion && (
