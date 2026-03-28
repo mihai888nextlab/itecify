@@ -5,6 +5,8 @@ import { FileTree } from '@/components/explorer/FileTree';
 import { CustomAgentManager } from '@/components/agents/CustomAgentManager';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEditorStore } from '@/stores/editorStore';
+import * as Y from 'yjs';
+import { WebsocketProvider } from 'y-websocket';
 import {
   Zap, Terminal as TerminalIcon, X, FileCode, Play, Square, Copy, ExternalLink, Settings, Files, Search, GitBranch, Puzzle, Bot, Eye, Send, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, Circle, Sparkles, Maximize2, Minimize2, Plus, FolderPlus, File, Hash, ArrowRight, CornerDownLeft, MoreHorizontal, Trash2, Pencil, Folder, Users, Code2, Terminal, Star, GitMerge, Wand2
 } from 'lucide-react';
@@ -519,8 +521,43 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [isWsConnected, setIsWsConnected] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const toastRef = React.useRef<NodeJS.Timeout | null>(null);
+  const addChatMessageRef = React.useRef<((from: string, text: string) => void) | null>(null);
+  const setChatMessagesRef = React.useRef<(messages: any[]) => void>((messages) => {
+    setChatMsgs(messages.length > 0 ? messages : [{ from: 'system', text: '✦ Connected to session', time: 'now' }]);
+  });
+  
+  const handleSetChatMessages = React.useCallback((messages: any[]) => {
+    setChatMessagesRef.current(messages);
+  }, []);
+  
+  const handleSetAddChatMessageRef = React.useCallback((callback: ((from: string, text: string) => void) | null) => {
+    if (callback) {
+      addChatMessageRef.current = callback;
+    }
+  }, []);
+  
+  const insertAIContentRef = React.useRef<((content: string) => void) | null>(null);
+  const acceptAIRef = React.useRef<(() => void) | null>(null);
+  const rejectAIRef = React.useRef<(() => void) | null>(null);
+  const [hasAISuggestion, setHasAISuggestion] = React.useState(false);
+  
+  const handleInsertAIContent = React.useCallback((fn: (content: string) => void) => {
+    insertAIContentRef.current = fn;
+  }, []);
+  
+  const handleAIAccept = React.useCallback((fn: () => void) => {
+    acceptAIRef.current = fn;
+  }, []);
+  
+  const handleAIReject = React.useCallback((fn: () => void) => {
+    rejectAIRef.current = fn;
+  }, []);
+  
+  const handleHasAISuggestion = React.useCallback((has: boolean) => {
+    setHasAISuggestion(has);
+  }, []);
 
-  const { isExecuting, setExecuting, settings, addAIBlock, aiBlocks, updateAIBlock, removeAIBlock, setUsers, setConnected } = useSessionStore();
+  const { isExecuting, setExecuting, settings, setUsers, setConnected } = useSessionStore();
   const { activeFileId, files, openFile, closeFile, loadFilesFromProject, addFile, updateFileContent, setCurrentProjectId, editorSetContentFn, setEditorSetContentFn, addFolder, removeFile, renameFile, moveFile } = useEditorStore();
 
   React.useEffect(() => {
@@ -545,6 +582,42 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   React.useEffect(() => {
     fetchCustomAgents();
   }, []);
+
+  React.useEffect(() => {
+    const ydoc = new Y.Doc();
+    const wsUrl = `${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:1234`;
+    const provider = new WebsocketProvider(wsUrl, `chat-${sessionId}`, ydoc, { connect: true });
+    const yChatArray = ydoc.getArray('chat');
+    
+    const syncChat = () => {
+      const messages: any[] = [];
+      yChatArray.forEach((msg: any) => messages.push(msg));
+      if (messages.length > 0 || chatMsgs.length <= 1) {
+        setChatMsgs(messages.length > 0 ? messages : [{ from: 'system', text: '✦ Connected to chat', time: 'now' }]);
+      }
+    };
+    
+    yChatArray.observe(syncChat);
+    syncChat();
+    
+    const addMessage = (from: string, text: string) => {
+      const msg = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        from,
+        text,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      yChatArray.push([msg]);
+    };
+    
+    addChatMessageRef.current = addMessage;
+    
+    return () => {
+      yChatArray.unobserve(syncChat);
+      provider.destroy();
+      ydoc.destroy();
+    };
+  }, [sessionId]);
 
   React.useEffect(() => {
     const id = setInterval(() => setAgentTask(t => (t + 1) % 5), 3500);
@@ -908,52 +981,6 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     document.addEventListener('mouseup', handleMouseUp);
   }, [terminalHeight]);
 
-  const handleAcceptAIBlock = (block: any) => {
-    if (!currentFile) return;
-    const currentContent = currentFile.content || '';
-    const newContent = currentContent + '\n' + block.content;
-    console.log('[DEBUG] ====== ACCEPT AI BLOCK ======');
-    console.log('[DEBUG] File:', currentFile.id, currentFile.name);
-    console.log('[DEBUG] New full content:');
-    console.log(newContent);
-    console.log('[DEBUG] editorSetContentFn:', !!editorSetContentFn);
-    console.log('[DEBUG] ===============================');
-    updateFileContent(currentFile.id, newContent);
-    if (editorSetContentFn) {
-      console.log('[DEBUG] Calling editorSetContentFn');
-      editorSetContentFn(currentFile.id, newContent);
-    } else {
-      console.log('[DEBUG] ERROR: editorSetContentFn is not set!');
-    }
-    updateAIBlock(block.id, { status: 'accepted' });
-    addTermLine('ok', '✓ AI code inserted into file');
-    showToast('Code inserted into file');
-  };
-
-  const handleRejectAIBlock = async (block: any) => {
-    if (block.rollbackData && block.rollbackData.length > 0 && project?.id) {
-      try {
-        const token = localStorage.getItem('accessToken');
-        const res = await fetch(`${API_URL}/api/agents/agents/execute/rollback`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ projectId: project.id, rollbackData: block.rollbackData }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.results) {
-            const reverted = data.results.filter((r: any) => r.success).length;
-            addTermLine('info', `Reverted ${reverted} file change(s)`);
-          }
-        }
-      } catch (err) {
-        console.error('Rollback failed:', err);
-      }
-    }
-    removeAIBlock(block.id);
-    addTermLine('info', 'AI suggestion rejected and changes reverted');
-  };
-
   const handleCreateFile = () => {
     if (newFileName.trim()) {
       const ext = newFileName.includes('.') ? newFileName.split('.').pop() : 'js';
@@ -1009,7 +1036,13 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
       
       if (result.success && result.content) {
         addTermLine('ok', '✓ AI generated code block');
-        addAIBlock({ agentId: 'groq-assistant', agentName: 'AI Assistant', content: result.content, status: 'pending', startLine: 0, endLine: 0 });
+        console.log('[AI Gen] insertAIContentRef.current:', !!insertAIContentRef.current);
+        if (insertAIContentRef.current) {
+          console.log('[AI Gen] Calling insertAIContent with content:', result.content.slice(0, 100));
+          insertAIContentRef.current(result.content);
+        } else {
+          console.log('[AI Gen] ERROR: insertAIContentRef.current is null!');
+        }
         setChatMsgs(prev => [...prev, { from: 'ai', text: `Generated: ${result.content.slice(0, 50)}...`, time: 'now' }]);
       } else {
         addTermLine('err', `✗ AI failed: ${result.error || 'Unknown error'}`);
@@ -1019,14 +1052,12 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     } finally {
       setIsGeneratingAI(false);
     }
-  }, [currentFile, addAIBlock]);
+  }, [currentFile]);
 
   const AGENTS = [
     { id: 'backend', name: 'Backend Gen', icon: <Bot size={13} color="#000" />, color: C.yellow, task: ['Generating…', 'Analyzing…', 'Writing…', 'Refactoring…', 'Types…'][agentTask] },
     { id: 'review', name: 'Code Review', icon: <Eye size={13} color="#fff" />, color: C.purple, task: 'Reviewing code…' },
   ];
-
-  const pendingBlocks = aiBlocks.filter(b => b.status === 'pending');
 
   return (
     <>
@@ -1327,6 +1358,12 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                     onUsersChange={setConnectedUsers}
                     onConnectionChange={setIsWsConnected}
                     onSetContent={setEditorSetContentFn}
+                    onChatMessages={handleSetChatMessages}
+                    onAddChatMessage={handleSetAddChatMessageRef}
+                    onInsertAIContent={handleInsertAIContent}
+                    onAIAccept={handleAIAccept}
+                    onAIReject={handleAIReject}
+                    onHasAISuggestion={handleHasAISuggestion}
                   />
                 ) : (
                   <WelcomeScreen 
@@ -1334,6 +1371,64 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                     onNewFolder={() => { setShowNewFolderInput(true); setActiveRail('files'); }}
                     onOpenSettings={() => {}}
                   />
+                )}
+                
+                {hasAISuggestion && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 16,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    display: 'flex',
+                    gap: 8,
+                    padding: '8px 12px',
+                    backgroundColor: C.card,
+                    border: `1px solid ${C.purple}`,
+                    borderRadius: 8,
+                    boxShadow: `0 4px 20px rgba(168, 85, 247, 0.3)`,
+                    zIndex: 100,
+                  }}>
+                    <span style={{ fontSize: 12, color: C.purple, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Sparkles size={14} /> AI Suggestion
+                    </span>
+                    <div style={{ width: 1, backgroundColor: C.border }} />
+                    <button
+                      onClick={() => { acceptAIRef.current?.(); setHasAISuggestion(false); }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '4px 12px',
+                        backgroundColor: C.green,
+                        border: 'none',
+                        borderRadius: 4,
+                        color: '#000',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <CheckCircle size={14} /> Accept
+                    </button>
+                    <button
+                      onClick={() => { rejectAIRef.current?.(); setHasAISuggestion(false); }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '4px 12px',
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 4,
+                        color: C.muted,
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <X size={14} /> Reject
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -1373,7 +1468,12 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
-              {rightPanel === 'chat' && <ChatPanel messages={chatMsgs} input={chatInput} onInputChange={setChatInput} onSend={() => { if (chatInput.trim()) { setChatMsgs(prev => [...prev, { from: 'user', text: chatInput, time: 'now' }]); setChatInput(''); } }} />}
+              {rightPanel === 'chat' && <ChatPanel messages={chatMsgs} input={chatInput} onInputChange={setChatInput} onSend={() => { 
+                if (chatInput.trim() && addChatMessageRef.current) { 
+                  addChatMessageRef.current('user', chatInput); 
+                  setChatInput(''); 
+                }
+              }} />}
               {rightPanel === 'security' && <SecurityPanel />}
             </div>
           </div>
@@ -1394,31 +1494,23 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
             onRunAgent={(agent) => {
               setRunningAgentId(agent.id);
               setCompletedAgentId(null);
+              if (addChatMessageRef.current) {
+                addChatMessageRef.current('ai', `✦ AI Agent "${agent.name}" started`);
+              }
             }}
             runningAgentId={runningAgentId}
             completedAgentId={completedAgentId}
             onAgentResult={(result) => {
               if (result.success) {
-                addAIBlock({
-                  agentId: 'custom-agent',
-                  agentName: result.agentName,
-                  content: result.content,
-                  status: 'pending',
-                  startLine: 0,
-                  endLine: 0,
-                  rollbackData: result.fileOperations?.filter((op: any) => 
-                    op.success && ['CREATE', 'MODIFY', 'DELETE'].includes(op.type)
-                  ).map((op: any) => ({
-                    type: op.type,
-                    path: op.path,
-                    fileId: op.fileId,
-                    originalContent: op.originalContent,
-                    fileData: op.fileData,
-                  })) || [],
-                });
+                if (insertAIContentRef.current) {
+                  insertAIContentRef.current(result.content);
+                }
                 setRunningAgentId(null);
                 setCompletedAgentId(runningAgentId);
-                addTermLine('info', `✓ AI Agent "${result.agentName}" completed - review suggestion`);
+                addTermLine('info', `✓ AI Agent "${result.agentName}" completed - code inserted`);
+                if (addChatMessageRef.current) {
+                  addChatMessageRef.current('ai', `✦ AI Agent "${result.agentName}" completed - code inserted`);
+                }
               }
             }}
           />

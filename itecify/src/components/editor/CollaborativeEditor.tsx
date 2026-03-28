@@ -1,5 +1,5 @@
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
-import { EditorState, Extension, StateEffect, StateField } from '@codemirror/state';
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
+import { EditorState, Extension, StateField, StateEffect } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language';
 import { javascript } from '@codemirror/lang-javascript';
@@ -7,9 +7,9 @@ import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { useSessionStore, AIBlock, User } from '@/stores/sessionStore';
+import { User } from '@/stores/sessionStore';
 import { useEditorStore, FileNode } from '@/stores/editorStore';
-import { Bot, Check, X, ChevronDown, ChevronRight, Move, UserCircle } from 'lucide-react';
+import { UserCircle } from 'lucide-react';
 import { CollabErrorBoundary } from './CollabErrorBoundary';
 
 const iTECifyTheme = EditorView.theme({
@@ -49,6 +49,48 @@ const iTECifyTheme = EditorView.theme({
     fontFamily: 'var(--font-mono)',
     whiteSpace: 'nowrap',
   },
+  '.cm-ai-block': {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    borderBottom: '2px solid rgba(139, 92, 246, 0.4)',
+  },
+  '.cm-ai-suggestion': {
+    backgroundColor: 'rgba(139, 92, 246, 0.25)',
+    borderBottom: '2px solid #8b5cf6',
+    borderRadius: '2px',
+    padding: '0 2px',
+  },
+  '.cm-ai-header': {
+    color: '#a855f7',
+    fontWeight: 'bold',
+    fontStyle: 'italic',
+  },
+});
+
+const aiSuggestionMark = Decoration.mark({ class: 'cm-ai-suggestion' });
+const aiHeaderMark = Decoration.mark({ class: 'cm-ai-header' });
+
+const addAIHighlight = StateEffect.define<{ from: number; to: number; isHeader?: boolean }>();
+const removeAIHighlights = StateEffect.define<void>();
+
+const aiHighlightsField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(addAIHighlight)) {
+        const { from, to, isHeader } = effect.value;
+        decorations = decorations.update({
+          add: [{ from, to, value: isHeader ? aiHeaderMark : aiSuggestionMark }],
+        });
+      } else if (effect.is(removeAIHighlights)) {
+        decorations = Decoration.none;
+      }
+    }
+    return decorations;
+  },
+  provide: f => EditorView.decorations.from(f),
 });
 
 interface CodeEditorProps {
@@ -57,6 +99,12 @@ interface CodeEditorProps {
   onUsersChange?: (users: User[]) => void;
   onConnectionChange?: (connected: boolean) => void;
   onSetContent?: (fn: (fileId: string, content: string) => void) => void;
+  onChatMessages?: (messages: Array<{ from: string; text: string; time: string; id: string }>) => void;
+  onAddChatMessage?: (fn: (from: string, text: string) => void) => void;
+  onInsertAIContent?: (fn: (content: string) => void) => void;
+  onAIAccept?: (fn: () => void) => void;
+  onAIReject?: (fn: () => void) => void;
+  onHasAISuggestion?: (has: boolean) => void;
 }
 
 function getLanguageExtension(language: string): Extension {
@@ -70,7 +118,7 @@ function getLanguageExtension(language: string): Extension {
   }
 }
 
-export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent }: CodeEditorProps) {
+export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent, onChatMessages, onAddChatMessage, onInsertAIContent, onAIAccept, onAIReject, onHasAISuggestion }: CodeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const providerRef = useRef<any>(null);
@@ -79,17 +127,30 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   const onUsersChangeRef = useRef(onUsersChange);
   const onConnectionChangeRef = useRef(onConnectionChange);
   const onSetContentRef = useRef(onSetContent);
+  const onChatMessagesRef = useRef(onChatMessages);
+  const onAddChatMessageRef = useRef(onAddChatMessage);
+  const onInsertAIContentRef = useRef(onInsertAIContent);
+  const onAIAcceptRef = useRef(onAIAccept);
+  const onAIRejectRef = useRef(onAIReject);
+  const onHasAISuggestionRef = useRef(onHasAISuggestion);
   const editorSetContentRef = useRef<((fileId: string, content: string) => void) | null>(null);
+  const aiSuggestionRef = useRef<{ from: number; to: number } | null>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
   const [isCollabReady, setIsCollabReady] = useState(false);
+  const [hasAISuggestion, setHasAISuggestion] = useState(false);
   const [selectionInfo, setSelectionInfo] = useState<{ user: User | null; position: { x: number; y: number } } | null>(null);
-  const { aiBlocks, updateAIBlock, removeAIBlock } = useSessionStore();
   const { activeFileId, files, updateFileContent, openFile } = useEditorStore();
   const [userChanges, setUserChanges] = useState<Map<number, { user: User; timestamp: number }>>(new Map());
 
   onUsersChangeRef.current = onUsersChange;
   onConnectionChangeRef.current = onConnectionChange;
   onSetContentRef.current = onSetContent;
+  onChatMessagesRef.current = onChatMessages;
+  onAddChatMessageRef.current = onAddChatMessage;
+  onInsertAIContentRef.current = onInsertAIContent;
+  onAIAcceptRef.current = onAIAccept;
+  onAIRejectRef.current = onAIReject;
+  onHasAISuggestionRef.current = onHasAISuggestion;
 
   useEffect(() => {
     const handleError = (event: ErrorEvent) => {
@@ -192,7 +253,7 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
       console.log('[SETEDITOR] Registering setEditorContent via onSetContentRef');
       onSetContentRef.current(setEditorContent);
     }
-
+    
     const initEditor = async () => {
       const Y = await import('yjs');
       const { WebsocketProvider } = await import('y-websocket');
@@ -202,6 +263,31 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
       ydocRef.current = ydoc;
 
       yFilesMap = ydoc.getMap('files');
+      const yChatArray = ydoc.getArray('chat');
+      
+      const syncChatFromYjs = () => {
+        const messages: Array<{ from: string; text: string; time: string; id: string }> = [];
+        yChatArray.forEach((msg: any) => {
+          messages.push(msg);
+        });
+        onChatMessagesRef.current?.(messages);
+      };
+      
+      yChatArray.observe(() => {
+        syncChatFromYjs();
+      });
+      
+      const addChatMessage = (from: string, text: string, msgId?: string) => {
+        const msg = {
+          id: msgId || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          from,
+          text,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        yChatArray.push([msg]);
+      };
+      
+      onAddChatMessageRef.current?.(addChatMessage);
 
       const syncFilesFromYjs = () => {
         if (isLocalChange) return;
@@ -262,6 +348,7 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         provider.on('synced', () => {
           console.log('[Collab] Initial sync complete');
           syncFilesFromYjs();
+          syncChatFromYjs();
           resolve();
         });
         setTimeout(resolve, 2000);
@@ -436,6 +523,7 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
           oneDark,
           iTECifyTheme,
           yRemoteSelectionsTheme,
+          aiHighlightsField,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           file?.language === 'python' ? python() : javascript({ typescript: file?.language === 'typescript' }),
           updateListener,
@@ -446,11 +534,14 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
           try {
             const undoManager = new Y.UndoManager(ytext);
             const collabExtension = yCollab(ytext, provider.awareness, { undoManager });
+            console.log('[createExtensions] yCollab added for fileId:', fileId);
             return [...baseExtensions, collabExtension];
           } catch (e) {
             console.warn('yCollab initialization error:', e);
             return baseExtensions;
           }
+        } else {
+          console.log('[createExtensions] WARNING: provider.awareness is null, yCollab NOT added!');
         }
         
         return baseExtensions;
@@ -503,6 +594,122 @@ greet('iTEC 2026');
         state,
         parent: editorRef.current,
       });
+
+      const insertAIContent = (content: string) => {
+        console.log('[insertAIContent] Called with content length:', content.length);
+        console.log('[insertAIContent] view exists:', !!view);
+        console.log('[insertAIContent] ytextMap size:', ytextMap.size);
+        
+        const fileId = useEditorStore.getState().activeFileId;
+        console.log('[insertAIContent] activeFileId:', fileId);
+        
+        if (!fileId) {
+          console.log('[insertAIContent] ERROR: No active file');
+          return;
+        }
+        
+        const ytextKey = `file:${fileId}`;
+        console.log('[insertAIContent] ytextKey:', ytextKey);
+        
+        let ytext = ytextMap.get(ytextKey);
+        console.log('[insertAIContent] ytext from map:', !!ytext);
+        
+        if (!ytext) {
+          console.log('[insertAIContent] Creating new ytext for:', ytextKey);
+          ytext = ydoc.getText(ytextKey);
+          ytextMap.set(ytextKey, ytext);
+        }
+        
+        console.log('[insertAIContent] Final check - ytext:', !!ytext, 'view:', !!view);
+        
+        if (ytext && view) {
+          isLocalChange = true;
+          const insertPos = ytext.length;
+          const separator = insertPos > 0 ? '\n\n' : '';
+          const aiHeader = '// ✦ AI Suggestion\n';
+          const fullContent = separator + aiHeader + content;
+          
+          console.log('[insertAIContent] Inserting at pos:', insertPos, 'content:', fullContent.slice(0, 50));
+          
+          ytext.insert(insertPos, fullContent);
+          
+          console.log('[insertAIContent] ytext length after insert:', ytext.length);
+          
+          const aiFrom = insertPos;
+          const aiTo = insertPos + fullContent.length;
+          aiSuggestionRef.current = { from: aiFrom, to: aiTo };
+          
+          setTimeout(() => {
+            if (view) {
+              view.dispatch({
+                selection: { anchor: aiFrom + separator.length + aiHeader.length },
+                effects: [
+                  addAIHighlight.of({ from: aiFrom, to: aiFrom + separator.length + aiHeader.length, isHeader: true }),
+                  addAIHighlight.of({ from: aiFrom + separator.length + aiHeader.length, to: aiTo }),
+                ],
+              });
+              view.focus();
+              setHasAISuggestion(true);
+              onHasAISuggestionRef.current?.(true);
+              console.log('[insertAIContent] Highlight applied and focused');
+            }
+          }, 50);
+          isLocalChange = false;
+          console.log('[insertAIContent] SUCCESS - Content inserted with highlight');
+        } else {
+          console.log('[insertAIContent] ERROR: ytext or view is null', { ytext: !!ytext, view: !!view });
+        }
+      };
+      
+      const acceptAISuggestion = () => {
+        if (aiSuggestionRef.current && view) {
+          view.dispatch({
+            effects: [removeAIHighlights.of()],
+          });
+          aiSuggestionRef.current = null;
+          setHasAISuggestion(false);
+          onHasAISuggestionRef.current?.(false);
+          console.log('[AI] Suggestion accepted');
+        }
+      };
+      
+      const rejectAISuggestion = () => {
+        if (aiSuggestionRef.current && view) {
+          const { from, to } = aiSuggestionRef.current;
+          const fileId = useEditorStore.getState().activeFileId;
+          if (fileId) {
+            const ytextKey = `file:${fileId}`;
+            const ytext = ytextMap.get(ytextKey);
+            if (ytext) {
+              isLocalChange = true;
+              ytext.delete(from, to - from);
+              isLocalChange = false;
+            }
+          }
+          view.dispatch({
+            effects: [removeAIHighlights.of()],
+          });
+          aiSuggestionRef.current = null;
+          setHasAISuggestion(false);
+          onHasAISuggestionRef.current?.(false);
+          console.log('[AI] Suggestion rejected and removed');
+        }
+      };
+      
+      if (onInsertAIContentRef.current) {
+        console.log('[Collab] Registering insertAIContent callback');
+        onInsertAIContentRef.current(insertAIContent);
+        console.log('[Collab] insertAIContent registered successfully');
+      } else {
+        console.log('[Collab] WARNING: onInsertAIContentRef.current is null!');
+      }
+      
+      if (onAIAcceptRef.current) {
+        onAIAcceptRef.current(acceptAISuggestion);
+      }
+      if (onAIRejectRef.current) {
+        onAIRejectRef.current(rejectAISuggestion);
+      }
 
       setIsCollabReady(true);
 
@@ -586,30 +793,6 @@ greet('iTEC 2026');
     };
   }, [projectId, user]);
 
-  const handleAcceptBlock = useCallback((blockId: string) => {
-    updateAIBlock(blockId, { status: 'accepted' });
-  }, [updateAIBlock]);
-
-  const handleRejectBlock = useCallback(async (blockId: string) => {
-    const block = aiBlocks.find(b => b.id === blockId);
-    if (block?.rollbackData && block.rollbackData.length > 0) {
-      try {
-        const token = localStorage.getItem('accessToken');
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-        await fetch(`${API_URL}/api/agents/agents/execute/rollback`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ projectId, rollbackData: block.rollbackData }),
-        });
-      } catch (err) {
-        console.error('Rollback failed:', err);
-      }
-    }
-    removeAIBlock(blockId);
-  }, [aiBlocks, projectId, removeAIBlock]);
-
-  const pendingBlocks = aiBlocks.filter(b => b.status === 'pending');
-
   return (
     <div className="relative h-full flex flex-col bg-[#020617]">
       <div className="flex-1 overflow-hidden relative">
@@ -625,14 +808,6 @@ greet('iTEC 2026');
           </div>
         )}
       </div>
-
-      {pendingBlocks.length > 0 && (
-        <AIBlocksOverlay
-          blocks={pendingBlocks}
-          onAccept={handleAcceptBlock}
-          onReject={handleRejectBlock}
-        />
-      )}
 
       <div className="absolute bottom-4 right-4 flex items-center gap-2 z-20">
         {connectedUsers.map((u, i) => (
@@ -689,93 +864,6 @@ function mergeFiles(localFiles: FileNode[], remoteFiles: FileNode[]): FileNode[]
   }
   
   return result;
-}
-
-function removeFilesFromTree(files: FileNode[], idsToRemove: Set<string>): FileNode[] {
-  return files
-    .filter(file => !idsToRemove.has(file.id))
-    .map(file => {
-      if (file.children) {
-        return {
-          ...file,
-          children: removeFilesFromTree(file.children, idsToRemove),
-        };
-      }
-      return file;
-    });
-}
-
-function AIBlocksOverlay({ blocks, onAccept, onReject }: { blocks: AIBlock[]; onAccept: (id: string) => void; onReject: (id: string) => void }) {
-  return (
-    <div className="ai-blocks-container absolute bottom-0 left-0 right-0 pointer-events-none z-10">
-      {blocks.map(block => (
-        <AIBlockInline
-          key={block.id}
-          block={block}
-          onAccept={() => onAccept(block.id)}
-          onReject={() => onReject(block.id)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function AIBlockInline({ block, onAccept, onReject }: { block: AIBlock; onAccept: () => void; onReject: () => void }) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  return (
-    <div 
-      className="ai-inline-block pointer-events-auto mx-3 mb-3 rounded-lg overflow-hidden"
-      style={{
-        backgroundColor: 'rgba(139, 92, 246, 0.1)',
-        border: '1px solid rgba(139, 92, 246, 0.3)',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-      }}
-    >
-      <div 
-        className="flex items-center justify-between px-4 py-2"
-        style={{ backgroundColor: 'rgba(139, 92, 246, 0.15)', borderBottom: '1px solid rgba(139, 92, 246, 0.2)' }}
-      >
-        <div className="flex items-center gap-2">
-          <Bot size={14} style={{ color: '#a78bfa' }} />
-          <span className="text-xs font-medium" style={{ color: '#c4b5fd' }}>
-            {block.agentName}
-          </span>
-          <span className="text-[10px]" style={{ color: '#64748b' }}>
-            AI Suggestion
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onAccept}
-            className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded transition"
-            style={{ backgroundColor: '#22c55e', color: '#000' }}
-            title="Accept (keep changes)"
-          >
-            <Check size={12} />
-            Accept
-          </button>
-          <button
-            onClick={onReject}
-            className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded transition"
-            style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#94a3b8' }}
-            title="Reject (undo changes)"
-          >
-            <X size={12} />
-            Reject
-          </button>
-        </div>
-      </div>
-      <div className="p-4">
-        <pre 
-          className="font-mono text-sm whitespace-pre-wrap leading-relaxed"
-          style={{ color: '#e2e8f0' }}
-        >
-          {block.content}
-        </pre>
-      </div>
-    </div>
-  );
 }
 
 export { CodeEditor as CollaborativeEditor };
