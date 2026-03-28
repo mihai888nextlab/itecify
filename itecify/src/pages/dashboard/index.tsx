@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { Plus, Folder, Users, Clock, Settings, LogOut, Trash2, Crown } from 'lucide-react';
+import { Plus, Folder, Users, Clock, LogOut, Trash2, Crown } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ToastProvider, useToast } from '@/components/ui/Toast';
 import { UserAvatar } from '@/components/ui/UserAvatar';
+import { theme as C } from '@/styles/theme';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -134,19 +135,18 @@ function DashboardContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[#020617]">
-      {/* Header */}
-      <header className="bg-slate-900/80 backdrop-blur-sm border-b border-slate-800">
+    <div className="min-h-screen" style={{ backgroundColor: C.bg }}>
+      <header style={{ backgroundColor: C.surface, borderBottom: `1px solid ${C.border}` }}>
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/" className="text-2xl font-black tracking-tighter text-white">
-            iTEC<span className="text-blue-500">ify</span>
+          <Link href="/" className="text-2xl font-black tracking-tighter" style={{ color: C.text }}>
+            iTEC<span style={{ color: C.blue }}>ify</span>
           </Link>
           
           <div className="flex items-center gap-4">
             {user && (
               <div className="flex items-center gap-3">
-                <UserAvatar name={user.name} color="#3b82f6" size="sm" />
-                <span className="text-sm text-slate-300">{user.name}</span>
+                <UserAvatar name={user.name} color={C.blue} size="sm" />
+                <span className="text-sm" style={{ color: C.text }}>{user.name}</span>
               </div>
             )}
             <Button variant="ghost" size="sm" onClick={handleLogout}>
@@ -156,12 +156,11 @@ function DashboardContent() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-white">Your Projects</h1>
-            <p className="text-slate-400 mt-1">Manage your workspaces and collaborators</p>
+            <h1 className="text-2xl font-bold" style={{ color: C.text }}>Your Projects</h1>
+            <p className="mt-1" style={{ color: C.muted }}>Manage your workspaces and collaborators</p>
           </div>
           <Button onClick={() => setShowCreateModal(true)}>
             <Plus size={18} /> New Project
@@ -171,14 +170,14 @@ function DashboardContent() {
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[1, 2, 3].map(i => (
-              <div key={i} className="bg-slate-900/50 border border-slate-800 rounded-xl h-48 animate-pulse" />
+              <div key={i} className="rounded-xl h-48 animate-pulse" style={{ backgroundColor: C.card, border: `1px solid ${C.border}` }} />
             ))}
           </div>
         ) : projects.length === 0 ? (
           <div className="text-center py-20">
-            <Folder size={64} className="mx-auto text-slate-700 mb-4" />
-            <h2 className="text-xl font-semibold text-slate-400 mb-2">No projects yet</h2>
-            <p className="text-slate-500 mb-6">Create your first project to start collaborating</p>
+            <Folder size={64} className="mx-auto mb-4" style={{ color: C.border }} />
+            <h2 className="text-xl font-semibold mb-2" style={{ color: C.muted }}>No projects yet</h2>
+            <p className="mb-6" style={{ color: C.border }}>Create your first project to start collaborating</p>
             <Button onClick={() => setShowCreateModal(true)}>
               <Plus size={18} /> Create Project
             </Button>
@@ -188,25 +187,26 @@ function DashboardContent() {
             {projects.map(project => (
               <div
                 key={project.id}
-                className="bg-slate-900/50 border border-slate-800 rounded-xl p-6 hover:border-slate-700 transition group"
+                className="rounded-xl p-6 transition group"
+                style={{ backgroundColor: C.card, border: `1px solid ${C.border}` }}
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <Link href={`/workspace/${project.id}`}>
-                      <h3 className="text-lg font-semibold text-white hover:text-blue-400 transition">
+                      <h3 className="text-lg font-semibold hover transition" style={{ color: C.text }}>
                         {project.name}
                       </h3>
                     </Link>
                     {project.description && (
-                      <p className="text-sm text-slate-400 mt-1 line-clamp-2">{project.description}</p>
+                      <p className="text-sm mt-1 line-clamp-2" style={{ color: C.muted }}>{project.description}</p>
                     )}
                   </div>
                   {project.owner.id === user?.id && (
-                    <Crown size={16} className="text-amber-500" />
+                    <Crown size={16} style={{ color: C.yellow }} />
                   )}
                 </div>
 
-                <div className="flex items-center gap-4 text-xs text-slate-500 mb-4">
+                <div className="flex items-center gap-4 text-xs mb-4" style={{ color: C.muted }}>
                   <span className="flex items-center gap-1">
                     <Users size={14} />
                     {project._count.members} member{project._count.members !== 1 ? 's' : ''}
@@ -219,18 +219,18 @@ function DashboardContent() {
 
                 <div className="flex items-center justify-between">
                   <div className="flex -space-x-2">
-                    <UserAvatar name={project.owner.name} color="#3b82f6" size="sm" />
+                    <UserAvatar name={project.owner.name} color={C.blue} size="sm" />
                     {project.members.slice(0, 3).map((m, i) => (
-                      <UserAvatar key={i} name={m.user.name} color="#22c55e" size="sm" />
+                      <UserAvatar key={i} name={m.user.name} color={C.green} size="sm" />
                     ))}
                     {project._count.members > 4 && (
-                      <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-[10px] text-slate-300">
+                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px]" style={{ backgroundColor: C.border, color: C.muted }}>
                         +{project._count.members - 4}
                       </div>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <div className="flex items-center gap-1 transition" style={{ opacity: 0 }}>
                     <Link href={`/workspace/${project.id}`}>
                       <Button variant="ghost" size="sm">
                         Open
@@ -241,7 +241,8 @@ function DashboardContent() {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleDeleteProject(project.id)}
-                        className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        className="hover:bg-red-500/10"
+                        style={{ color: C.red }}
                       >
                         <Trash2 size={14} />
                       </Button>
@@ -254,29 +255,30 @@ function DashboardContent() {
         )}
       </main>
 
-      {/* Create Project Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md mx-4">
-            <h2 className="text-xl font-bold text-white mb-4">Create New Project</h2>
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}>
+          <div className="rounded-xl p-6 w-full max-w-md mx-4" style={{ backgroundColor: C.card, border: `1px solid ${C.border}` }}>
+            <h2 className="text-xl font-bold mb-4" style={{ color: C.text }}>Create New Project</h2>
             <form onSubmit={handleCreateProject} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Project Name</label>
+                <label className="block text-sm font-medium mb-2" style={{ color: C.text }}>Project Name</label>
                 <input
                   type="text"
                   value={newProject.name}
                   onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg px-4 py-2.5 focus:outline-none"
+                  style={{ backgroundColor: C.surface, border: `1px solid ${C.border}`, color: C.text }}
                   placeholder="My Awesome Project"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Description (optional)</label>
+                <label className="block text-sm font-medium mb-2" style={{ color: C.text }}>Description (optional)</label>
                 <textarea
                   value={newProject.description}
                   onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none h-24"
+                  className="w-full rounded-lg px-4 py-2.5 resize-none h-24 focus:outline-none"
+                  style={{ backgroundColor: C.surface, border: `1px solid ${C.border}`, color: C.text }}
                   placeholder="A brief description of your project..."
                 />
               </div>

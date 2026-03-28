@@ -378,7 +378,7 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
 
   fastify.patch('/:id/files/:fileId', async (request, reply) => {
     const { id, fileId } = request.params as { id: string; fileId: string };
-    const { name, parentId } = request.body as { name?: string; parentId?: string | null };
+    const { name, parentId, content } = request.body as { name?: string; parentId?: string | null; content?: string };
     const project = await fastify.prisma.project.findUnique({ where: { id } });
 
     if (!project) {
@@ -413,6 +413,7 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       data: {
         ...(name && { name }),
         ...(parentId !== undefined && { parentId: parentId }),
+        ...(content !== undefined && { content }),
       },
     });
 

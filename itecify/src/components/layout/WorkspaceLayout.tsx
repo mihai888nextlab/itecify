@@ -930,20 +930,42 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     showToast('Code inserted into file');
   };
 
-  const handleRejectAIBlock = (blockId: string) => {
-    removeAIBlock(blockId);
-    addTermLine('info', 'AI suggestion rejected');
+  const handleRejectAIBlock = async (block: any) => {
+    if (block.rollbackData && block.rollbackData.length > 0 && project?.id) {
+      try {
+        const token = localStorage.getItem('accessToken');
+        const res = await fetch(`${API_URL}/api/agents/agents/execute/rollback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ projectId: project.id, rollbackData: block.rollbackData }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.results) {
+            const reverted = data.results.filter((r: any) => r.success).length;
+            addTermLine('info', `Reverted ${reverted} file change(s)`);
+          }
+        }
+      } catch (err) {
+        console.error('Rollback failed:', err);
+      }
+    }
+    removeAIBlock(block.id);
+    addTermLine('info', 'AI suggestion rejected and changes reverted');
   };
 
   const handleCreateFile = () => {
     if (newFileName.trim()) {
       const ext = newFileName.includes('.') ? newFileName.split('.').pop() : 'js';
       const langMap: Record<string, string> = { js: 'javascript', ts: 'typescript', py: 'python', json: 'json', html: 'html', css: 'css' };
-      addFile({ name: newFileName.trim(), type: 'file', language: langMap[ext || 'js'] || 'javascript', content: '' });
+      addFile({ name: newFileName.trim(), type: 'file', language: langMap[ext || 'js'] || 'javascript', content: '' }).then((fileId) => {
+        if (fileId) {
+          addTermLine('info', `File created: ${newFileName.trim()} (ID: ${fileId})`);
+        }
+      });
       setNewFileName('');
       setShowNewFileInput(false);
       showToast(`Created ${newFileName.trim()}`);
-      addTermLine('info', `File created: ${newFileName.trim()}`);
     }
   };
 
@@ -1313,23 +1335,6 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                     onOpenSettings={() => {}}
                   />
                 )}
-                {pendingBlocks.length > 0 && (
-                  <div style={{ position: 'absolute', bottom: 8, right: 8, display: 'flex', flexDirection: 'column', gap: 8, zIndex: 100 }}>
-                    {pendingBlocks.map(block => (
-                      <div key={block.id} style={{ backgroundColor: C.card, border: `1px solid ${C.yellow}40`, borderRadius: 8, padding: 12, maxWidth: 300 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                          <Bot size={14} color={C.yellow} />
-                          <span style={{ fontSize: 12, fontWeight: 600 }}>{block.agentName}</span>
-                        </div>
-                        <pre className="mono" style={{ fontSize: 11, color: C.muted, overflow: 'auto', maxHeight: 100, marginBottom: 8 }}>{block.content}</pre>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <button onClick={() => handleAcceptAIBlock(block)} style={{ flex: 1, padding: '6px 12px', backgroundColor: C.green, border: 'none', borderRadius: 6, color: '#000', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Accept</button>
-                          <button onClick={() => handleRejectAIBlock(block.id)} style={{ flex: 1, padding: '6px 12px', backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, fontSize: 12, cursor: 'pointer' }}>Reject</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
 
@@ -1401,6 +1406,15 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                   status: 'pending',
                   startLine: 0,
                   endLine: 0,
+                  rollbackData: result.fileOperations?.filter((op: any) => 
+                    op.success && ['CREATE', 'MODIFY', 'DELETE'].includes(op.type)
+                  ).map((op: any) => ({
+                    type: op.type,
+                    path: op.path,
+                    fileId: op.fileId,
+                    originalContent: op.originalContent,
+                    fileData: op.fileData,
+                  })) || [],
                 });
                 setRunningAgentId(null);
                 setCompletedAgentId(runningAgentId);

@@ -1,1 +1,1 @@
-{"version":3,"file":"terminal.d.ts","sourceRoot":"","sources":["../../src/routes/terminal.ts"],"names":[],"mappings":"AAAA,OAAO,EAAmB,kBAAkB,EAAE,MAAM,SAAS,CAAC;AA8B9D,QAAA,MAAM,cAAc,EAAE,kBA6MrB,CAAC;AAEF,eAAe,cAAc,CAAC"}
+{"version":3,"file":"terminal.d.ts","sourceRoot":"","sources":["../../src/routes/terminal.ts"],"names":[],"mappings":"AAAA,OAAO,EAAmB,kBAAkB,EAAE,MAAM,SAAS,CAAC;AA+B9D,QAAA,MAAM,cAAc,EAAE,kBAkSrB,CAAC;AAEF,eAAe,cAAc,CAAC"}

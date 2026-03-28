@@ -8,6 +8,15 @@ export interface User {
   role: 'human' | 'ai';
   cursorPosition?: { line: number; ch: number };
   selection?: { from: number; to: number };
+  setAt?: number;
+}
+
+export interface RollbackItem {
+  type: 'CREATE' | 'MODIFY' | 'DELETE';
+  path: string;
+  fileId?: string;
+  originalContent?: string;
+  fileData?: { name: string; content: string; language: string; parentId: string | null };
 }
 
 export interface AIBlock {
@@ -19,6 +28,7 @@ export interface AIBlock {
   startLine: number;
   endLine: number;
   createdAt: Date;
+  rollbackData?: RollbackItem[];
 }
 
 export interface SessionSettings {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createContainer, startContainer, stopContainer, removeContainer, executeInContainer, copyFilesToContainer, getContainerStatus, getProjectContainer, DOCKER_IMAGES } from '../services/dockerService.js';
+import { createContainer, startContainer, stopContainer, removeContainer, executeInContainer, copyFilesToContainer, getContainerStatus, getProjectContainer, readAllContainerFiles, DOCKER_IMAGES } from '../services/dockerService.js';
 const executeSchema = z.object({
     projectId: z.string(),
     command: z.string(),
@@ -140,8 +140,10 @@ const terminalRoutes = async (fastify) => {
     fastify.post('/execute', async (request, reply) => {
         try {
             const body = executeSchema.parse(request.body);
+            fastify.log.info(`[Terminal] Execute request for project ${body.projectId}: ${body.command}`);
             let container = getProjectContainer(body.projectId);
             if (!container) {
+                fastify.log.info(`[Terminal] Container not found, creating new one`);
                 try {
                     const { exec } = await import('child_process');
                     const { promisify } = await import('util');
@@ -155,6 +157,7 @@ const terminalRoutes = async (fastify) => {
                     });
                 }
                 catch (e) {
+                    fastify.log.error(`[Terminal] Failed to create container:`, e);
                     return reply.code(500).send({
                         success: false,
                         error: 'Failed to create container: ' + e.message,
@@ -162,11 +165,13 @@ const terminalRoutes = async (fastify) => {
                 }
             }
             if (container.status !== 'running') {
+                fastify.log.info(`[Terminal] Container not running, starting it`);
                 try {
                     await startContainer(body.projectId);
                     container = getProjectContainer(body.projectId);
                 }
                 catch (e) {
+                    fastify.log.error(`[Terminal] Failed to start container:`, e);
                     return reply.code(500).send({
                         success: false,
                         error: 'Failed to start container: ' + e.message,
@@ -175,6 +180,7 @@ const terminalRoutes = async (fastify) => {
             }
             // Sync files to container before executing command
             if (body.files && body.files.length > 0) {
+                fastify.log.info(`[Terminal] Syncing ${body.files.length} files to container`);
                 await copyFilesToContainer(body.projectId, body.files);
             }
             const result = await executeInContainer(body.projectId, body.command, body.workdir);
@@ -191,6 +197,65 @@ const terminalRoutes = async (fastify) => {
                 success: false,
                 error: error.message,
             });
+        }
+    });
+    fastify.post('/sync-from-container', async (request, reply) => {
+        try {
+            const body = request.body;
+            fastify.log.info(`[Terminal] Syncing files from container for project ${body.projectId}`);
+            const container = getProjectContainer(body.projectId);
+            if (!container) {
+                fastify.log.error('[Terminal] Container not found during sync');
+                return reply.code(400).send({
+                    success: false,
+                    error: 'Container not found',
+                });
+            }
+            fastify.log.info(`[Terminal] Container status: ${container.status}, name: ${container.name}`);
+            if (container.status !== 'running') {
+                fastify.log.info('[Terminal] Container not running, starting it');
+                await startContainer(body.projectId);
+            }
+            const files = await readAllContainerFiles(body.projectId);
+            fastify.log.info(`[Terminal] Read ${files.length} files from container`);
+            files.forEach(f => fastify.log.info(`  - ${f.name} (${f.content.length} bytes)`));
+            return {
+                success: true,
+                files,
+            };
+        }
+        catch (error) {
+            fastify.log.error('Sync from container error:', error);
+            return reply.code(500).send({
+                success: false,
+                error: error.message,
+            });
+        }
+    });
+    fastify.get('/debug/:projectId', async (request, reply) => {
+        try {
+            const { projectId } = request.params;
+            const container = getProjectContainer(projectId);
+            if (!container) {
+                return { exists: false, error: 'Container not in memory' };
+            }
+            // Run ls directly in container to see what's there
+            const { exec } = await import('child_process');
+            const { promisify } = await import('util');
+            const execAsync = promisify(exec);
+            const workDir = `/workspace/${projectId}`;
+            const { stdout: dockerLs } = await execAsync(`docker exec ${container.name} ls -la "${workDir}" 2>&1`);
+            const { stdout: dockerLsRoot } = await execAsync(`docker exec ${container.name} ls -la /workspace 2>&1`);
+            return {
+                exists: true,
+                containerName: container.name,
+                containerStatus: container.status,
+                workDirContents: dockerLs,
+                workspaceContents: dockerLsRoot,
+            };
+        }
+        catch (error) {
+            return { error: error.message };
         }
     });
 };

@@ -383,3 +383,106 @@ export async function getContainerStatus(projectId: string): Promise<Container |
 export function getProjectContainer(projectId: string): Container | undefined {
   return containers.get(projectId);
 }
+
+export async function ensureContainer(projectId: string, image: string = 'node:20'): Promise<Container> {
+  let container = containers.get(projectId);
+  
+  if (!container) {
+    container = await createContainer({
+      projectId,
+      image,
+      name: `itecify-${projectId}`,
+    });
+  } else if (container.status !== 'running') {
+    await startContainer(projectId);
+    container = containers.get(projectId)!;
+  }
+  
+  return container!;
+}
+
+export async function terminalRead(projectId: string, filePath: string): Promise<{ success: boolean; content?: string; error?: string }> {
+  try {
+    const container = await ensureContainer(projectId);
+    const workDir = `/workspace/${projectId}`;
+    const fullPath = filePath.startsWith('/') ? filePath : `${workDir}/${filePath}`;
+    
+    const { stdout, stderr } = await execAsync(
+      `docker exec ${container.name} cat "${fullPath}" 2>&1`,
+      { timeout: 10000 }
+    );
+    
+    if (stderr && !stdout) {
+      return { success: false, error: stderr };
+    }
+    
+    return { success: true, content: stdout };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function terminalWrite(projectId: string, filePath: string, content: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const container = await ensureContainer(projectId);
+    const workDir = `/workspace/${projectId}`;
+    const fullPath = filePath.startsWith('/') ? filePath : `${workDir}/${filePath}`;
+    
+    const escapedContent = content
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\$/g, '\\$')
+      .replace(/`/g, '\\`');
+    
+    await execAsync(
+      `docker exec ${container.name} sh -c "mkdir -p $(dirname '${fullPath}') && echo \\"${escapedContent}\\" > '${fullPath}'"`,
+      { timeout: 10000 }
+    );
+    
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function terminalDelete(projectId: string, filePath: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const container = await ensureContainer(projectId);
+    const workDir = `/workspace/${projectId}`;
+    const fullPath = filePath.startsWith('/') ? filePath : `${workDir}/${filePath}`;
+    
+    await execAsync(
+      `docker exec ${container.name} rm -rf "${fullPath}" 2>&1`,
+      { timeout: 10000 }
+    );
+    
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function terminalList(projectId: string, dirPath?: string): Promise<{ success: boolean; files?: string[]; error?: string }> {
+  try {
+    const container = await ensureContainer(projectId);
+    const workDir = `/workspace/${projectId}`;
+    const fullPath = dirPath?.startsWith('/') ? dirPath : `${workDir}/${dirPath || ''}`;
+    
+    const { stdout } = await execAsync(
+      `docker exec ${container.name} ls -la "${fullPath}" 2>&1`,
+      { timeout: 10000 }
+    );
+    
+    const files = stdout.split('\n')
+      .filter(line => !line.startsWith('total') && !line.match(/^d[rwx-]+\s+\d+\s+\w+\s+\w+\s+\d+\s+\S+\s+\S+\s+\S+\s+\.\s*$/) && !line.match(/^d[rwx-]+\s+\d+\s+\w+\s+\w+\s+\d+\s+\S+\s+\S+\s+\S+\s+\.\.\s*$/))
+      .map(line => {
+        const parts = line.split(/\s+/);
+        return parts[parts.length - 1];
+      })
+      .filter(name => name && name !== '.' && name !== '..');
+    
+    return { success: true, files };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}

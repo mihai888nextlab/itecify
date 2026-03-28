@@ -86,6 +86,7 @@ async function saveState(projectId: string, doc: Y.Doc) {
 }
 
 const connections = new Map<string, WSConnection>();
+const userAwarenessMap = new Map<string, { projectId: string; clientId: number }>();
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url || '', `http://${req.headers.host}`);
@@ -94,15 +95,31 @@ wss.on('connection', (ws, req) => {
   console.log(`Client connected to project: ${projectId}`);
   
   const { doc, awareness } = getYDoc(projectId);
-  const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const clientId = doc.clientID;
   
   const conn: WSConnection = { ws, doc, awareness, projectId };
-  connections.set(clientId, conn);
+  connections.set(clientId.toString(), conn);
   
   const send = (data: Uint8Array) => {
     if (ws.readyState === 1) {
       ws.send(data);
     }
+  };
+  
+  const cleanupDuplicateAwareness = () => {
+    const userIdToClientId = new Map<string, number>();
+    const clientIdToUserId = new Map<number, string>();
+    
+    awareness.getStates().forEach((state: any, clientId: number) => {
+      if (state?.user?.id) {
+        const existingClientId = userIdToClientId.get(state.user.id);
+        if (existingClientId !== undefined) {
+          awarenessProtocol.removeAwarenessStates(awareness, [existingClientId], null);
+        }
+        userIdToClientId.set(state.user.id, clientId);
+        clientIdToUserId.set(clientId, state.user.id);
+      }
+    });
   };
   
   const awarenessChangeHandler = ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) => {
@@ -112,6 +129,10 @@ wss.on('connection', (ws, req) => {
     encoding.writeVarUint8Array(encoder, awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients));
     const message = encoding.toUint8Array(encoder);
     send(message);
+    
+    if (added.length > 0) {
+      cleanupDuplicateAwareness();
+    }
   };
   
   awareness.on('update', awarenessChangeHandler);
@@ -147,9 +168,11 @@ wss.on('connection', (ws, req) => {
           break;
         }
         case messageAwareness: {
+          const update = decoding.readVarUint8Array(decoder);
+          
           awarenessProtocol.applyAwarenessUpdate(
             awareness,
-            decoding.readVarUint8Array(decoder),
+            update,
             null
           );
           break;
@@ -174,13 +197,19 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', async () => {
-    connections.delete(clientId);
+    connections.delete(clientId.toString());
     awareness.off('update', awarenessChangeHandler);
     doc.off('update', docUpdateHandler);
     
+    userAwarenessMap.forEach((value, userId) => {
+      if (value.projectId === projectId && value.clientId === clientId) {
+        userAwarenessMap.delete(userId);
+      }
+    });
+    
     awarenessProtocol.removeAwarenessStates(
       awareness,
-      [doc.clientID],
+      [clientId],
       null
     );
     

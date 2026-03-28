@@ -1,5 +1,5 @@
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from '@codemirror/view';
-import { EditorState, Extension } from '@codemirror/state';
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
+import { EditorState, Extension, StateEffect, StateField } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language';
 import { javascript } from '@codemirror/lang-javascript';
@@ -9,7 +9,7 @@ import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSessionStore, AIBlock, User } from '@/stores/sessionStore';
 import { useEditorStore, FileNode } from '@/stores/editorStore';
-import { Bot, Check, X, ChevronDown, ChevronRight, Move } from 'lucide-react';
+import { Bot, Check, X, ChevronDown, ChevronRight, Move, UserCircle } from 'lucide-react';
 import { CollabErrorBoundary } from './CollabErrorBoundary';
 
 const iTECifyTheme = EditorView.theme({
@@ -51,25 +51,6 @@ const iTECifyTheme = EditorView.theme({
   },
 });
 
-const awarenessTheme = EditorView.theme({
-  '.cm-ySelectionInfo': {
-    padding: '2px 6px',
-    borderRadius: '4px',
-    fontSize: '10px',
-    fontFamily: "'JetBrains Mono', monospace",
-    whiteSpace: 'nowrap',
-    opacity: '1 !important',
-    visibility: 'visible !important',
-    pointerEvents: 'none',
-  },
-  '.cm-ySelection': {
-    opacity: '1 !important',
-  },
-  '.cm-ySelectionCaretDot': {
-    display: 'none',
-  },
-});
-
 interface CodeEditorProps {
   projectId: string;
   user: { id: string; name: string; color: string };
@@ -101,8 +82,10 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   const editorSetContentRef = useRef<((fileId: string, content: string) => void) | null>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
   const [isCollabReady, setIsCollabReady] = useState(false);
+  const [selectionInfo, setSelectionInfo] = useState<{ user: User | null; position: { x: number; y: number } } | null>(null);
   const { aiBlocks, updateAIBlock, removeAIBlock } = useSessionStore();
   const { activeFileId, files, updateFileContent, openFile } = useEditorStore();
+  const [userChanges, setUserChanges] = useState<Map<number, { user: User; timestamp: number }>>(new Map());
 
   onUsersChangeRef.current = onUsersChange;
   onConnectionChangeRef.current = onConnectionChange;
@@ -213,57 +196,54 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
     const initEditor = async () => {
       const Y = await import('yjs');
       const { WebsocketProvider } = await import('y-websocket');
-      const { yCollab } = await import('y-codemirror.next');
+      const { yCollab, yRemoteSelectionsTheme } = await import('y-codemirror.next');
 
       ydoc = new Y.Doc();
       ydocRef.current = ydoc;
 
       yFilesMap = ydoc.getMap('files');
 
-      const syncFromYjs = () => {
+      const syncFilesFromYjs = () => {
         if (isLocalChange) return;
-
-        const editorStore = useEditorStore.getState();
-        const yjsFiles: FileNode[] = [];
-
-        yFilesMap.forEach((value: any, key: string) => {
-          if (key === '_meta') return;
-          if (value === null) return;
-          try {
-            const fileData = typeof value === 'string' ? JSON.parse(value) : value;
-            if (fileData && fileData.id) {
-              yjsFiles.push(fileData);
-            }
-          } catch (e) {
-            console.warn('Failed to parse file from Yjs:', e);
-          }
-        });
-
-        const localFiles = editorStore.files;
-        const localFilesHaveContent = localFiles.length > 0 && localFiles.some(f => f.content && f.content.length > 0);
+        isLocalChange = true;
         
-        if (localFilesHaveContent && yjsFiles.length === 0) {
-          return;
-        }
-
-        if (yjsFiles.length > 0 && localFilesHaveContent) {
-          const mergedFiles = [...localFiles];
+        try {
+          const storeFiles = useEditorStore.getState().files;
+          const newFiles = [...storeFiles];
+          const processedIds = new Set<string>();
           
-          yjsFiles.forEach(yjsFile => {
-            const existsInLocal = mergedFiles.some(f => f.id === yjsFile.id);
-            if (!existsInLocal) {
-              mergedFiles.push(yjsFile);
+          yFilesMap.forEach((value: any, key: string) => {
+            if (key === '_meta') return;
+            processedIds.add(key);
+            
+            const remoteFile: FileNode = value;
+            const existingIndex = newFiles.findIndex(f => f.id === key);
+            
+            if (existingIndex === -1) {
+              newFiles.push(remoteFile);
+              console.log('[Sync] File added from Yjs:', remoteFile.name);
+            } else {
+              newFiles[existingIndex] = remoteFile;
             }
           });
           
-          useEditorStore.setState({ files: mergedFiles });
-        } else if (yjsFiles.length > 0) {
-          useEditorStore.setState({ files: yjsFiles });
+          const idsToRemove: string[] = [];
+          newFiles.forEach((file, index) => {
+            if (!processedIds.has(file.id)) {
+              idsToRemove.push(String(index));
+            }
+          });
+          idsToRemove.reverse().forEach(idx => newFiles.splice(parseInt(idx), 1));
+          
+          useEditorStore.setState({ files: newFiles });
+        } finally {
+          isLocalChange = false;
         }
       };
-
-      yFilesMap.observe((event: any) => {
-        syncFromYjs();
+      
+      yFilesMap.observe(() => {
+        console.log('[Yjs] File map changed, syncing from Yjs...');
+        syncFilesFromYjs();
       });
 
       const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:1234`;
@@ -274,11 +254,39 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
 
       providerRef.current = provider;
 
+      await new Promise<void>((resolve) => {
+        provider.on('synced', () => {
+          console.log('[Collab] Initial sync complete');
+          resolve();
+        });
+        setTimeout(resolve, 2000);
+      });
+
+      let cleanupInterval: NodeJS.Timeout | null = null;
+      
       if (provider.awareness) {
+        let localAwarenessSetAt = Date.now();
         provider.awareness.setLocalStateField('user', {
+          id: user.id,
           name: user.name,
           color: user.color,
+          setAt: localAwarenessSetAt,
         });
+
+        const refreshLocalAwareness = () => {
+          const now = Date.now();
+          if (now - localAwarenessSetAt > 10000) {
+            localAwarenessSetAt = now;
+            provider.awareness?.setLocalStateField('user', {
+              id: user.id,
+              name: user.name,
+              color: user.color,
+              setAt: now,
+            });
+          }
+        };
+
+        cleanupInterval = setInterval(refreshLocalAwareness, 10000);
 
         provider.awareness.on('change', () => {
           try {
@@ -286,16 +294,21 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
             if (!states) return;
             const users: User[] = [];
             const localClientId = ydoc?.clientID;
+            const now = Date.now();
             states.forEach((state: any, clientId: number) => {
               if (state.user && localClientId !== undefined && clientId !== localClientId) {
-                const existing = users.find(u => u.name === state.user.name);
+                const userSetAt = state.user.setAt || 0;
+                if (now - userSetAt > 30000) return;
+                const userId = state.user.id || `unknown-${clientId}`;
+                const existing = users.find(u => u.id === userId);
                 if (!existing) {
                   users.push({
-                    id: String(clientId),
+                    id: userId,
                     name: state.user.name || 'Anonymous',
                     color: state.user.color || '#3b82f6',
                     role: 'human',
                     cursorPosition: state.cursor,
+                    setAt: userSetAt,
                   });
                 }
               }
@@ -310,69 +323,69 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
 
       provider.on('status', ({ status }: { status: string }) => {
         onConnectionChangeRef.current?.(status === 'connected');
+        if (status === 'disconnected') {
+          setConnectedUsers([]);
+          onUsersChangeRef.current?.([]);
+        }
       });
 
+      const cleanupAwareness = () => {
+        if (cleanupInterval) {
+          clearInterval(cleanupInterval);
+          cleanupInterval = null;
+        }
+        if (provider.awareness) {
+          provider.awareness.setLocalState(null);
+        }
+      };
+
       const syncFilesToYjs = () => {
-        const editorFiles = useEditorStore.getState().files;
+        if (isLocalChange) return;
+        isLocalChange = true;
         
-        if (editorFiles.length === 0) return;
+        const editorFiles = useEditorStore.getState().files;
+        if (editorFiles.length === 0) {
+          isLocalChange = false;
+          return;
+        }
         
         const currentIds = new Set<string>();
         
-        isLocalChange = true;
-        editorFiles.forEach(file => {
-          syncFileToYjs(file, yFilesMap);
-          collectIds(file, currentIds);
+        const flattenFiles = (files: FileNode[]): FileNode[] => {
+          const result: FileNode[] = [];
+          for (const file of files) {
+            result.push({ ...file, children: undefined });
+            if (file.children) {
+              result.push(...flattenFiles(file.children));
+            }
+          }
+          return result;
+        };
+        
+        const flatFiles = flattenFiles(editorFiles);
+        const fileMap = new Map(flatFiles.map(f => [f.id, f]));
+        
+        fileMap.forEach((file, id) => {
+          currentIds.add(id);
+          const existing = yFilesMap.get(id);
+          const fileStr = JSON.stringify(file);
+          if (!existing || JSON.stringify(existing) !== fileStr) {
+            yFilesMap.set(id, file);
+          }
         });
         
-        yFilesMap.forEach((value: any, key: string) => {
+        const idsToDelete: string[] = [];
+        yFilesMap.forEach((_: any, key: string) => {
           if (key !== '_meta' && !currentIds.has(key)) {
-            yFilesMap.delete(key);
+            idsToDelete.push(key);
           }
         });
+        idsToDelete.forEach(id => yFilesMap.delete(id));
         
-        setTimeout(() => { isLocalChange = false; }, 100);
+        isLocalChange = false;
       };
 
-      const collectIds = (file: FileNode, ids: Set<string>) => {
-        ids.add(file.id);
-        if (file.children) {
-          file.children.forEach((child: FileNode) => collectIds(child, ids));
-        }
-      };
-
-      const syncFileToYjs = (file: FileNode, yMap: any) => {
-        const existing = yMap.get(file.id);
-        if (!existing || JSON.stringify(existing) !== JSON.stringify(file)) {
-          yMap.set(file.id, file);
-        }
-        if (file.children) {
-          file.children.forEach((child: FileNode) => syncFileToYjs(child, yMap));
-        }
-      };
-
-      const createExtensions = (fileId: string) => {
-        let ytext = ytextMap.get(`file:${fileId}`);
-        if (!ytext) {
-          ytext = ydoc.getText(`file:${fileId}`);
-          ytextMap.set(`file:${fileId}`, ytext);
-        }
-        
-        const updateListener = EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            const newContent = update.state.doc.toString();
-            updateFileContent(fileId, newContent);
-          }
-          if (update.selectionSet && provider?.awareness) {
-            const selection = update.state.selection.main;
-            provider.awareness.setLocalStateField('cursor', {
-              anchor: selection.anchor,
-              head: selection.head,
-              user: { name: user.name, color: user.color },
-            });
-          }
-        });
-        
+      const createExtensions = (fileId: string, ytext: any) => {
         const file = (() => {
           const find = (nodes: FileNode[], id: string): FileNode | null => {
             for (const n of nodes) {
@@ -387,17 +400,15 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
           return find(useEditorStore.getState().files, fileId);
         })();
         
-        const yCollabExtension = (() => {
-          if (!provider.awareness) return [];
-          try {
-            return yCollab(ytext, provider.awareness);
-          } catch (e) {
-            console.warn('yCollab initialization failed, disabling remote cursors:', e);
-            return [];
+        const updateListener = EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            const newContent = update.state.doc.toString();
+            updateFileContent(fileId, newContent);
           }
-        })();
+        });
         
-        return [
+        // Base extensions (no yCollab yet - added after awareness is ready)
+        const baseExtensions: Extension[] = [
           lineNumbers(),
           highlightActiveLine(),
           highlightActiveLineGutter(),
@@ -411,12 +422,25 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
           syntaxHighlighting(defaultHighlightStyle),
           oneDark,
           iTECifyTheme,
-          awarenessTheme,
+          yRemoteSelectionsTheme,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           file?.language === 'python' ? python() : javascript({ typescript: file?.language === 'typescript' }),
-          yCollabExtension,
           updateListener,
         ];
+        
+        // Add yCollab if provider and awareness are ready
+        if (provider?.awareness) {
+          try {
+            const undoManager = new Y.UndoManager(ytext);
+            const collabExtension = yCollab(ytext, provider.awareness, { undoManager });
+            return [...baseExtensions, collabExtension];
+          } catch (e) {
+            console.warn('yCollab initialization error:', e);
+            return baseExtensions;
+          }
+        }
+        
+        return baseExtensions;
       };
 
       const activeFile = useEditorStore.getState().activeFileId;
@@ -459,7 +483,7 @@ greet('iTEC 2026');
 
       const state = EditorState.create({
         doc: initialYText.toString(),
-        extensions: createExtensions(initialFileId),
+        extensions: createExtensions(initialFileId, initialYText),
       });
 
       view = new EditorView({
@@ -509,7 +533,7 @@ greet('iTEC 2026');
             view?.setState(
               EditorState.create({
                 doc: newYText.toString(),
-                extensions: createExtensions(newFileId),
+                extensions: createExtensions(newFileId, newYText),
               })
             );
           }
@@ -522,6 +546,7 @@ greet('iTEC 2026');
 
       return () => {
         unsubscribeFileChange();
+        cleanupAwareness();
         view?.destroy();
         provider?.destroy();
         ydoc?.destroy();
@@ -551,9 +576,23 @@ greet('iTEC 2026');
     updateAIBlock(blockId, { status: 'accepted' });
   }, [updateAIBlock]);
 
-  const handleRejectBlock = useCallback((blockId: string) => {
+  const handleRejectBlock = useCallback(async (blockId: string) => {
+    const block = aiBlocks.find(b => b.id === blockId);
+    if (block?.rollbackData && block.rollbackData.length > 0) {
+      try {
+        const token = localStorage.getItem('accessToken');
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+        await fetch(`${API_URL}/api/agents/agents/execute/rollback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ projectId, rollbackData: block.rollbackData }),
+        });
+      } catch (err) {
+        console.error('Rollback failed:', err);
+      }
+    }
     removeAIBlock(blockId);
-  }, [removeAIBlock]);
+  }, [aiBlocks, projectId, removeAIBlock]);
 
   const pendingBlocks = aiBlocks.filter(b => b.status === 'pending');
 
@@ -593,6 +632,24 @@ greet('iTEC 2026');
           </div>
         ))}
       </div>
+
+      {selectionInfo && selectionInfo.user && (
+        <div
+          className="absolute z-30 px-3 py-2 rounded-lg text-xs shadow-lg"
+          style={{
+            left: Math.min(selectionInfo.position.x, window.innerWidth - 200),
+            top: Math.max(selectionInfo.position.y, 10),
+            backgroundColor: selectionInfo.user.color,
+            color: '#fff',
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <UserCircle size={14} />
+            <span className="font-medium">{selectionInfo.user.name}</span>
+            <span className="opacity-70">is editing this</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -636,9 +693,9 @@ function removeFilesFromTree(files: FileNode[], idsToRemove: Set<string>): FileN
 
 function AIBlocksOverlay({ blocks, onAccept, onReject }: { blocks: AIBlock[]; onAccept: (id: string) => void; onReject: (id: string) => void }) {
   return (
-    <div className="absolute inset-0 pointer-events-none z-10 overflow-auto">
+    <div className="ai-blocks-container absolute bottom-0 left-0 right-0 pointer-events-none z-10">
       {blocks.map(block => (
-        <AIBlockWidget
+        <AIBlockInline
           key={block.id}
           block={block}
           onAccept={() => onAccept(block.id)}
@@ -649,54 +706,60 @@ function AIBlocksOverlay({ blocks, onAccept, onReject }: { blocks: AIBlock[]; on
   );
 }
 
-function AIBlockWidget({ block, onAccept, onReject }: { block: AIBlock; onAccept: () => void; onReject: () => void }) {
+function AIBlockInline({ block, onAccept, onReject }: { block: AIBlock; onAccept: () => void; onReject: () => void }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
-    <div className="ai-block pointer-events-auto" style={{ margin: '8px 16px' }}>
-      <div className="ai-block-header">
+    <div 
+      className="ai-inline-block pointer-events-auto mx-3 mb-3 rounded-lg overflow-hidden"
+      style={{
+        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+        border: '1px solid rgba(139, 92, 246, 0.3)',
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+      }}
+    >
+      <div 
+        className="flex items-center justify-between px-4 py-2"
+        style={{ backgroundColor: 'rgba(139, 92, 246, 0.15)', borderBottom: '1px solid rgba(139, 92, 246, 0.2)' }}
+      >
         <div className="flex items-center gap-2">
-          <Bot size={14} className="text-purple-400" />
-          <span className="text-xs font-medium text-purple-300">
-            Generated by {block.agentName}
+          <Bot size={14} style={{ color: '#a78bfa' }} />
+          <span className="text-xs font-medium" style={{ color: '#c4b5fd' }}>
+            {block.agentName}
           </span>
-          <span className="text-[10px] text-slate-500">
-            {new Date(block.createdAt).toLocaleTimeString()}
+          <span className="text-[10px]" style={{ color: '#64748b' }}>
+            AI Suggestion
           </span>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1 hover:bg-white/10 rounded transition"
+            onClick={onAccept}
+            className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded transition"
+            style={{ backgroundColor: '#22c55e', color: '#000' }}
+            title="Accept (keep changes)"
           >
-            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+            <Check size={12} />
+            Accept
           </button>
-          <div className="ai-block-actions flex gap-1">
-            <button
-              onClick={onAccept}
-              className="p-1.5 bg-green-500/20 hover:bg-green-500/40 text-green-400 rounded transition"
-              title="Accept"
-            >
-              <Check size={14} />
-            </button>
-            <button
-              onClick={onReject}
-              className="p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-400 rounded transition"
-              title="Reject"
-            >
-              <X size={14} />
-            </button>
-            <button className="p-1.5 bg-blue-500/20 hover:bg-blue-500/40 text-blue-400 rounded transition" title="Move">
-              <Move size={14} />
-            </button>
-          </div>
+          <button
+            onClick={onReject}
+            className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded transition"
+            style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#94a3b8' }}
+            title="Reject (undo changes)"
+          >
+            <X size={12} />
+            Reject
+          </button>
         </div>
       </div>
-      {!isCollapsed && (
-        <div className="p-4 font-mono text-sm text-slate-300">
-          <pre className="whitespace-pre-wrap">{block.content}</pre>
-        </div>
-      )}
+      <div className="p-4">
+        <pre 
+          className="font-mono text-sm whitespace-pre-wrap leading-relaxed"
+          style={{ color: '#e2e8f0' }}
+        >
+          {block.content}
+        </pre>
+      </div>
     </div>
   );
 }

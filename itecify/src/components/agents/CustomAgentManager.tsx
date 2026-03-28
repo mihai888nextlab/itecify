@@ -32,13 +32,21 @@ interface FileInfo {
   content: string;
 }
 
+interface FileOperation {
+  type: string;
+  path: string;
+  success: boolean;
+  message: string;
+  fileId?: string;
+}
+
 interface CustomAgentManagerProps {
   projectId: string;
   files: FileInfo[];
   onClose: () => void;
   onAgentsChange?: () => void;
   onRunAgent?: (agent: CustomAgent) => void;
-  onAgentResult?: (result: { success: boolean; content: string; agentName: string }) => void;
+  onAgentResult?: (result: { success: boolean; content: string; agentName: string; fileOperations?: FileOperation[] }) => void;
   runningAgentId?: string | null;
   completedAgentId?: string | null;
 }
@@ -208,7 +216,12 @@ export function CustomAgentManager({
       if (data.success) {
         setResult(data.content);
         onClose();
-        onAgentResult?.({ success: true, content: data.content, agentName: agent.name });
+        onAgentResult?.({ 
+          success: true, 
+          content: data.content, 
+          agentName: agent.name,
+          fileOperations: data.fileOperations || []
+        });
       } else {
         setError(data.error || 'Execution failed');
         setIsLoading(false);

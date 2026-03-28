@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { CheckCircle, XCircle, AlertTriangle, Info, X } from 'lucide-react';
+import { theme as C } from '@/styles/theme';
 
 type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -53,18 +54,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 }
 
 function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast: (id: string) => void }) {
-  const icons = {
-    success: <CheckCircle className="text-green-500" size={18} />,
-    error: <XCircle className="text-red-500" size={18} />,
-    warning: <AlertTriangle className="text-amber-500" size={18} />,
-    info: <Info className="text-blue-500" size={18} />,
+  const styles = {
+    success: { icon: C.green, bg: `${C.green}15`, border: `${C.green}40` },
+    error: { icon: C.red, bg: `${C.red}15`, border: `${C.red}40` },
+    warning: { icon: C.yellow, bg: `${C.yellow}15`, border: `${C.yellow}40` },
+    info: { icon: C.blue, bg: `${C.blue}15`, border: `${C.blue}40` },
   };
 
-  const bgColors = {
-    success: 'bg-green-500/10 border-green-500/30',
-    error: 'bg-red-500/10 border-red-500/30',
-    warning: 'bg-amber-500/10 border-amber-500/30',
-    info: 'bg-blue-500/10 border-blue-500/30',
+  const icons = {
+    success: <CheckCircle size={18} />,
+    error: <XCircle size={18} />,
+    warning: <AlertTriangle size={18} />,
+    info: <Info size={18} />,
   };
 
   return (
@@ -72,13 +73,18 @@ function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast:
       {toasts.map(toast => (
         <div
           key={toast.id}
-          className={`flex items-center gap-3 p-4 rounded-lg border backdrop-blur-sm animate-slide-in ${bgColors[toast.type]}`}
+          className="flex items-center gap-3 p-4 rounded-lg border backdrop-blur-sm"
+          style={{
+            backgroundColor: styles[toast.type].bg,
+            borderColor: styles[toast.type].border,
+            color: styles[toast.type].icon,
+          }}
         >
           {icons[toast.type]}
-          <span className="text-sm text-slate-200 flex-1">{toast.message}</span>
+          <span className="text-sm flex-1" style={{ color: C.text }}>{toast.message}</span>
           <button
             onClick={() => removeToast(toast.id)}
-            className="text-slate-400 hover:text-white transition"
+            style={{ color: C.muted }}
           >
             <X size={16} />
           </button>
