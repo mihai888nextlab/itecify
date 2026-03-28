@@ -280,7 +280,6 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     return collaborators;
   });
 
-  // Get project files
   fastify.get('/:id/files', async (request, reply) => {
     const { id } = request.params as { id: string };
     const project = await fastify.prisma.project.findUnique({ where: { id } });
@@ -289,48 +288,137 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       return reply.code(404).send({ error: 'Project not found' });
     }
 
+    const url = new URL(request.url, 'http://localhost');
+    const asTree = url.searchParams.get('tree') === 'true';
+
     const files = await fastify.prisma.projectFile.findMany({
       where: { projectId: id },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ isFolder: 'desc' }, { name: 'asc' }],
     });
 
-    return files;
+    if (!asTree) {
+      return files;
+    }
+
+    const buildTree = (parentId: string | null): any[] => {
+      return files
+        .filter(f => f.parentId === parentId)
+        .map(file => ({
+          id: file.id,
+          name: file.name,
+          type: file.isFolder ? 'folder' : 'file',
+          language: file.language,
+          content: file.content,
+          children: file.isFolder ? buildTree(file.id) : undefined,
+        }))
+        .sort((a, b) => {
+          if (a.type === 'folder' && b.type !== 'folder') return -1;
+          if (a.type !== 'folder' && b.type === 'folder') return 1;
+          return a.name.localeCompare(b.name);
+        });
+    };
+
+    return buildTree(null);
   });
 
-  // Create or update a file
   fastify.put('/:id/files', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { name, content, language } = request.body as { name: string; content: string; language: string };
+    const { name, content, language, isFolder, parentId } = request.body as { 
+      name: string; 
+      content?: string; 
+      language?: string;
+      isFolder?: boolean;
+      parentId?: string | null;
+    };
     const project = await fastify.prisma.project.findUnique({ where: { id } });
 
     if (!project) {
       return reply.code(404).send({ error: 'Project not found' });
     }
 
-    let file = await fastify.prisma.projectFile.findFirst({
-      where: { projectId: id, name },
+    if (parentId) {
+      const parent = await fastify.prisma.projectFile.findUnique({ where: { id: parentId } });
+      if (!parent || !parent.isFolder) {
+        return reply.code(400).send({ error: 'Parent must be a folder' });
+      }
+    }
+
+    const existing = await fastify.prisma.projectFile.findFirst({
+      where: { 
+        projectId: id, 
+        parentId: parentId || null,
+        name 
+      },
     });
 
-    if (file) {
-      file = await fastify.prisma.projectFile.update({
-        where: { id: file.id },
-        data: { content, language },
+    if (existing) {
+      const updated = await fastify.prisma.projectFile.update({
+        where: { id: existing.id },
+        data: { 
+          content: content ?? existing.content,
+          language: language ?? existing.language,
+          isFolder: isFolder ?? existing.isFolder,
+        },
       });
+      return updated;
     } else {
-      file = await fastify.prisma.projectFile.create({
+      const created = await fastify.prisma.projectFile.create({
         data: {
           projectId: id,
           name,
-          content,
-          language,
+          content: content ?? '',
+          language: language ?? 'javascript',
+          isFolder: isFolder ?? false,
+          parentId: parentId ?? null,
         },
       });
+      return created;
     }
-
-    return file;
   });
 
-  // Delete a file
+  fastify.patch('/:id/files/:fileId', async (request, reply) => {
+    const { id, fileId } = request.params as { id: string; fileId: string };
+    const { name, parentId } = request.body as { name?: string; parentId?: string | null };
+    const project = await fastify.prisma.project.findUnique({ where: { id } });
+
+    if (!project) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
+
+    const file = await fastify.prisma.projectFile.findUnique({ where: { id: fileId } });
+    if (!file) {
+      return reply.code(404).send({ error: 'File not found' });
+    }
+
+    if (name || parentId !== undefined) {
+      const targetParentId = parentId === undefined ? file.parentId : parentId;
+      const targetName = name || file.name;
+      
+      const collision = await fastify.prisma.projectFile.findFirst({
+        where: { 
+          projectId: id, 
+          parentId: targetParentId,
+          name: targetName,
+          NOT: { id: fileId }
+        },
+      });
+      
+      if (collision) {
+        return reply.code(409).send({ error: 'A file with this name already exists in this location' });
+      }
+    }
+
+    const updated = await fastify.prisma.projectFile.update({
+      where: { id: fileId },
+      data: {
+        ...(name && { name }),
+        ...(parentId !== undefined && { parentId: parentId }),
+      },
+    });
+
+    return updated;
+  });
+
   fastify.delete('/:id/files/:fileId', async (request, reply) => {
     const { id, fileId } = request.params as { id: string; fileId: string };
     const project = await fastify.prisma.project.findUnique({ where: { id } });
@@ -339,11 +427,33 @@ const projectRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       return reply.code(404).send({ error: 'Project not found' });
     }
 
-    await fastify.prisma.projectFile.delete({
+    const file = await fastify.prisma.projectFile.findUnique({ 
       where: { id: fileId },
+      include: { children: true }
     });
 
-    return { message: 'File deleted' };
+    if (!file) {
+      return reply.code(404).send({ error: 'File not found' });
+    }
+
+    const deleteRecursive = async (fid: string) => {
+      const item = await fastify.prisma.projectFile.findUnique({ 
+        where: { id: fid },
+        include: { children: true }
+      });
+      
+      if (item?.children) {
+        for (const child of item.children) {
+          await deleteRecursive(child.id);
+        }
+      }
+      
+      await fastify.prisma.projectFile.delete({ where: { id: fid } });
+    };
+
+    await deleteRecursive(fileId);
+
+    return { message: 'File deleted successfully' };
   });
 };
 

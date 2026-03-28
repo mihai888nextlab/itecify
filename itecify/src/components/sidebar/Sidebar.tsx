@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Folder, FolderOpen, File, FileCode, ChevronRight, ChevronDown, Plus, MoreHorizontal, Trash2, Bot, Clock, Settings, X, FolderPlus, FilePlus, Sparkles, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Folder, FolderOpen, File, FileCode, ChevronRight, ChevronDown, Plus, MoreHorizontal, Trash2, Bot, Clock, Settings, X, FolderPlus, FilePlus, Sparkles, Loader2, Pencil, Copy } from 'lucide-react';
 import { useEditorStore, FileNode } from '@/stores/editorStore';
 import { useSessionStore } from '@/stores/sessionStore';
 
@@ -31,19 +31,31 @@ const getLanguageFromExtension = (filename: string): string => {
   return mapping[ext || ''] || 'javascript';
 };
 
-function FileItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  node: FileNode | null;
+}
+
+function FileItem({ node, depth = 0, onRename }: { node: FileNode; depth?: number; onRename?: (nodeId: string, currentName: string) => void }) {
   const { activeFileId, openFile, toggleFolder, removeFile } = useEditorStore();
-  const [showMenu, setShowMenu] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const isActive = node.id === activeFileId;
   const isFolder = node.type === 'folder';
 
   useEffect(() => {
-    const handleClick = () => setShowMenu(false);
-    if (showMenu) {
-      document.addEventListener('click', handleClick);
-      return () => document.removeEventListener('click', handleClick);
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    if (showDropdown) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
     }
-  }, [showMenu]);
+  }, [showDropdown]);
 
   return (
     <div className="relative">
@@ -58,11 +70,6 @@ function FileItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
           } else {
             openFile(node.id);
           }
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setShowMenu(true);
         }}
       >
         {isFolder && (
@@ -83,66 +90,39 @@ function FileItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
         <button
           onClick={(e) => {
             e.stopPropagation();
-            setShowMenu(true);
+            setShowDropdown(!showDropdown);
           }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-700 rounded transition"
+          className="p-1 hover:bg-slate-600 rounded transition text-slate-400 hover:text-white opacity-50 group-hover:opacity-100"
         >
-          <MoreHorizontal size={12} className="text-slate-500" />
+          <MoreHorizontal size={16} />
         </button>
       </div>
-      {showMenu && (
+
+      {showDropdown && (
         <div
-          className="absolute bg-slate-800 border border-slate-700 rounded-md shadow-lg py-1 z-50 min-w-[120px]"
-          style={{ left: '100%', top: 0 }}
-          onClick={(e) => e.stopPropagation()}
+          ref={dropdownRef}
+          className="absolute right-2 top-full mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[140px] z-50"
         >
-          {isFolder && (
-            <>
-              <button
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700"
-                onClick={() => {
-                  useEditorStore.getState().addFile({
-                    name: 'new-file.js',
-                    type: 'file',
-                    language: 'javascript',
-                    content: '',
-                  }, node.id);
-                  setShowMenu(false);
-                }}
-              >
-                <FilePlus size={12} />
-                New File
-              </button>
-              <button
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700"
-                onClick={() => {
-                  useEditorStore.getState().addFolder('new-folder', node.id);
-                  setShowMenu(false);
-                }}
-              >
-                <FolderPlus size={12} />
-                New Folder
-              </button>
-              <div className="h-px bg-slate-700 my-1" />
-            </>
-          )}
           <button
-            className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-red-400 hover:bg-slate-700"
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition-colors"
             onClick={() => {
-              removeFile(node.id);
-              setShowMenu(false);
+              if (onRename) onRename(node.id, node.name);
+              setShowDropdown(false);
             }}
           >
-            <Trash2 size={12} />
+            <Pencil size={14} className="text-slate-400" />
+            Rename
+          </button>
+          <button
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-slate-700 transition-colors"
+            onClick={() => {
+              removeFile(node.id);
+              setShowDropdown(false);
+            }}
+          >
+            <Trash2 size={14} />
             Delete
           </button>
-        </div>
-      )}
-      {isFolder && node.isOpen && node.children && (
-        <div>
-          {node.children.map(child => (
-            <FileItem key={child.id} node={child} depth={depth + 1} />
-          ))}
         </div>
       )}
     </div>
@@ -207,6 +187,60 @@ function CreateDialog({ type, onClose, onCreate, defaultName }: CreateDialogProp
   );
 }
 
+interface RenameDialogProps {
+  currentName: string;
+  onClose: () => void;
+  onRename: (newName: string) => void;
+}
+
+function RenameDialog({ currentName, onClose, onRename }: RenameDialogProps) {
+  const [name, setName] = useState(currentName);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (name.trim() && name.trim() !== currentName) {
+      onRename(name.trim());
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 w-80">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-white font-medium">Rename</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">
+            <X size={16} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            autoFocus
+          />
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 text-sm text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+            >
+              Rename
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -222,9 +256,10 @@ export function Sidebar() {
 }
 
 export function FileTree() {
-  const { files, addFile, addFolder } = useEditorStore();
+  const { files, addFile, addFolder, renameFile } = useEditorStore();
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [showCreateFolder, setShowCreateFolder] = useState(false);
+  const [renameState, setRenameState] = useState<{ nodeId: string; currentName: string } | null>(null);
 
   const handleCreateFile = (name: string) => {
     addFile({
@@ -241,6 +276,17 @@ export function FileTree() {
     setShowCreateFolder(false);
   };
 
+  const handleRename = (nodeId: string, currentName: string) => {
+    setRenameState({ nodeId, currentName });
+  };
+
+  const handleRenameSubmit = (newName: string) => {
+    if (renameState) {
+      renameFile(renameState.nodeId, newName);
+      setRenameState(null);
+    }
+  };
+
   return (
     <div className="p-2">
       <div className="flex items-center justify-between px-2 py-1 mb-2">
@@ -248,23 +294,23 @@ export function FileTree() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => setShowCreateFile(true)}
-            className="p-1 hover:bg-slate-700 rounded transition text-slate-400 hover:text-white"
+            className="p-1.5 hover:bg-slate-700 rounded transition text-blue-400 hover:text-white border border-blue-500/30"
             title="New File"
           >
-            <FilePlus size={14} />
+            <FilePlus size={16} />
           </button>
           <button
             onClick={() => setShowCreateFolder(true)}
-            className="p-1 hover:bg-slate-700 rounded transition text-slate-400 hover:text-white"
+            className="p-1.5 hover:bg-slate-700 rounded transition text-amber-400 hover:text-white border border-amber-500/30"
             title="New Folder"
           >
-            <FolderPlus size={14} />
+            <FolderPlus size={16} />
           </button>
         </div>
       </div>
       <div className="space-y-0.5">
         {files.map(file => (
-          <FileItem key={file.id} node={file} />
+          <FileItem key={file.id} node={file} onRename={handleRename} />
         ))}
         {files.length === 0 && (
           <div className="text-center py-4 text-slate-500 text-sm">
@@ -287,6 +333,13 @@ export function FileTree() {
           onClose={() => setShowCreateFolder(false)}
           onCreate={handleCreateFolder}
           defaultName="new-folder"
+        />
+      )}
+      {renameState && (
+        <RenameDialog
+          currentName={renameState.currentName}
+          onClose={() => setRenameState(null)}
+          onRename={handleRenameSubmit}
         />
       )}
     </div>

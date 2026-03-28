@@ -23,6 +23,7 @@ model User {
   memberships   ProjectMember[]
   sessions      Session[]
   accounts      Account[]
+  customAgents  CustomAgent[]
 
   @@map("users")
 }
@@ -111,9 +112,28 @@ model ProjectFile {
   name      String
   content   String  @default("")
   language  String  @default("javascript")
+  isFolder  Boolean @default(false)
+  parentId  String?
+  parent    ProjectFile? @relation("FileHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  ProjectFile[] @relation("FileHierarchy")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([projectId, name])
+  @@unique([projectId, parentId, name])
   @@map("project_files")
+}
+
+model CustomAgent {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  prompt      String
+  color       String  @default("#4C8EFF")
+  icon        String  @default("Bot")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("custom_agents")
 }

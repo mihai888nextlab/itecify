@@ -1,10 +1,12 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { CollaborativeEditor } from '@/components/editor/CollaborativeEditor';
 import { PreviewPanel } from '@/components/preview/PreviewPanel';
+import { FileTree } from '@/components/explorer/FileTree';
+import { CustomAgentManager } from '@/components/agents/CustomAgentManager';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEditorStore } from '@/stores/editorStore';
 import {
-  Zap, Terminal as TerminalIcon, X, FileCode, Play, Square, Copy, ExternalLink, Settings, Files, Search, GitBranch, Puzzle, Bot, Eye, Send, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, Circle, Sparkles, Maximize2, Minimize2, Plus, FolderPlus, File, Hash, ArrowRight, CornerDownLeft
+  Zap, Terminal as TerminalIcon, X, FileCode, Play, Square, Copy, ExternalLink, Settings, Files, Search, GitBranch, Puzzle, Bot, Eye, Send, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, Circle, Sparkles, Maximize2, Minimize2, Plus, FolderPlus, File, Hash, ArrowRight, CornerDownLeft, MoreHorizontal, Trash2, Pencil, Folder, Users, Code2, Terminal, Star, GitMerge, Wand2
 } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -35,6 +37,161 @@ const RAIL_ITEMS = [
   { id: 'git', icon: <GitBranch size={16} />, label: 'Git' },
   { id: 'ext', icon: <Puzzle size={16} />, label: 'Extensions' },
 ];
+
+function WelcomeScreen({ onNewFile, onNewFolder, onOpenSettings }: { 
+  onNewFile: () => void; 
+  onNewFolder: () => void;
+  onOpenSettings: () => void;
+}) {
+  const features = [
+    { icon: <Code2 size={20} color={C.cyan} />, title: 'Collaborative Editing', desc: 'Real-time collaboration with your team' },
+    { icon: <File size={20} color={C.yellow} />, title: 'File Explorer', desc: 'Organize files in folders' },
+    { icon: <Bot size={20} color={C.purple} />, title: 'AI Assistants', desc: 'Generate, optimize, and review code' },
+    { icon: <Terminal size={20} color={C.green} />, title: 'Code Execution', desc: 'Run your code directly in the browser' },
+    { icon: <Users size={20} color={C.blue} />, title: 'Live Sessions', desc: 'Share project links for instant access' },
+    { icon: <GitMerge size={20} color={C.text} />, title: 'Version Control', desc: 'Track changes and collaborate' },
+  ];
+
+  return (
+    <div style={{
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: C.bg,
+      padding: 40,
+    }}>
+      <div style={{ textAlign: 'center', marginBottom: 48 }}>
+        <h1 style={{ 
+          fontSize: 32, 
+          fontWeight: 700, 
+          color: C.text, 
+          marginBottom: 12,
+          background: `linear-gradient(135deg, ${C.cyan}, ${C.blue})`,
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+        }}>
+          Welcome to iTECify
+        </h1>
+        <p style={{ fontSize: 16, color: C.muted, maxWidth: 500 }}>
+          A collaborative coding environment with AI assistants, real-time sync, and powerful tools.
+        </p>
+      </div>
+
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(3, 1fr)', 
+        gap: 16, 
+        marginBottom: 48,
+        maxWidth: 700,
+      }}>
+        {features.map((feature, i) => (
+          <div key={i} style={{
+            backgroundColor: C.card,
+            border: `1px solid ${C.border}`,
+            borderRadius: 12,
+            padding: 20,
+            textAlign: 'center',
+            transition: 'border-color 0.2s',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+              {feature.icon}
+            </div>
+            <h3 style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>
+              {feature.title}
+            </h3>
+            <p style={{ fontSize: 12, color: C.muted }}>
+              {feature.desc}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 32 }}>
+        <button 
+          onClick={onNewFile}
+          style={{
+            padding: '10px 20px',
+            backgroundColor: C.blue,
+            border: 'none',
+            borderRadius: 8,
+            color: '#fff',
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <File size={16} /> New File
+        </button>
+        <button 
+          onClick={onNewFolder}
+          style={{
+            padding: '10px 20px',
+            backgroundColor: C.card,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            color: C.text,
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <FolderPlus size={16} /> New Folder
+        </button>
+      </div>
+
+      <div style={{ 
+        display: 'flex', 
+        gap: 24, 
+        color: C.muted, 
+        fontSize: 12,
+        fontFamily: "'Fragment Mono', monospace",
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Star size={12} /> Right-click in Explorer to create files
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Users size={12} /> Share project link in header
+        </div>
+      </div>
+
+      <div style={{ 
+        marginTop: 48, 
+        padding: '16px 24px',
+        backgroundColor: C.surface,
+        borderRadius: 8,
+        border: `1px solid ${C.border}`,
+        maxWidth: 600,
+      }}>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+          Quick Tips
+        </div>
+        <ul style={{ 
+          fontSize: 13, 
+          color: C.text, 
+          listStyle: 'none', 
+          padding: 0, 
+          margin: 0,
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 8,
+        }}>
+          <li>• <span style={{ color: C.muted }}>Cmd/Ctrl + P</span> - Quick open</li>
+          <li>• <span style={{ color: C.muted }}>Cmd/Ctrl + S</span> - Save file</li>
+          <li>• <span style={{ color: C.muted }}>Right-click</span> - Context menu</li>
+          <li>• <span style={{ color: C.muted }}>AI button</span> - Generate code</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
 
 interface SearchResult {
   type: 'file' | 'content';
@@ -340,6 +497,10 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [isTerminalCollapsed, setIsTerminalCollapsed] = useState(false);
   const [activeRail, setActiveRail] = useState('files');
   const [hoveredRail, setHoveredRail] = useState<string | null>(null);
+  const [showAgentManager, setShowAgentManager] = useState(false);
+  const [customAgents, setCustomAgents] = useState<any[]>([]);
+  const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
+  const [completedAgentId, setCompletedAgentId] = useState<string | null>(null);
   const [rightPanel, setRightPanel] = useState<'chat' | 'security'>('chat');
   const [termInput, setTermInput] = useState('');
   const [chatInput, setChatInput] = useState('');
@@ -349,17 +510,41 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [showNewFileInput, setShowNewFileInput] = useState(false);
   const [newFileName, setNewFileName] = useState('');
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [dropdownFileId, setDropdownFileId] = useState<string | null>(null);
+  const [renameFileId, setRenameFileId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [connectedUsers, setConnectedUsers] = useState<any[]>([]);
   const [isWsConnected, setIsWsConnected] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const toastRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const { isExecuting, setExecuting, settings, addAIBlock, aiBlocks, updateAIBlock, removeAIBlock, setUsers, setConnected } = useSessionStore();
-  const { activeFileId, files, openFile, closeFile, loadFilesFromProject, addFile, updateFileContent, setCurrentProjectId, editorSetContentFn, setEditorSetContentFn } = useEditorStore();
+  const { activeFileId, files, openFile, closeFile, loadFilesFromProject, addFile, updateFileContent, setCurrentProjectId, editorSetContentFn, setEditorSetContentFn, addFolder, removeFile, renameFile, moveFile } = useEditorStore();
 
   React.useEffect(() => {
     if (project?.id) loadFilesFromProject(project.id);
   }, [project?.id, loadFilesFromProject]);
+
+  const fetchCustomAgents = async () => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      const res = await fetch(`${API_URL}/api/agents/agents`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCustomAgents(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch agents:', err);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchCustomAgents();
+  }, []);
 
   React.useEffect(() => {
     const id = setInterval(() => setAgentTask(t => (t + 1) % 5), 3500);
@@ -479,6 +664,10 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
       if (node.children) result.push(...getAllFiles(node.children));
     }
     return result;
+  };
+
+  const getFilesForContext = (): { name: string; content: string }[] => {
+    return getAllFiles(files).map(f => ({ name: f.name, content: f.content || '' }));
   };
 
   const allFiles = getAllFiles(files);
@@ -758,6 +947,30 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     }
   };
 
+  const handleCreateFolder = () => {
+    if (newFolderName.trim()) {
+      addFolder(newFolderName.trim());
+      setNewFolderName('');
+      setShowNewFolderInput(false);
+      showToast(`Created folder ${newFolderName.trim()}`);
+      addTermLine('info', `Folder created: ${newFolderName.trim()}`);
+    }
+  };
+
+  const handleRenameFile = () => {
+    if (renameFileId && renameValue.trim()) {
+      renameFile(renameFileId, renameValue.trim());
+      setRenameFileId(null);
+      setRenameValue('');
+      showToast('File renamed');
+    }
+  };
+
+  const handleMoveFile = useCallback((id: string, newParentId: string | null) => {
+    moveFile(id, newParentId);
+    showToast('File moved');
+  }, [moveFile]);
+
   const handleAIGenerate = useCallback(async (instruction: string) => {
     if (!currentFile?.content) { addTermLine('warn', '⚠ Open a file first to use AI'); return; }
     setIsGeneratingAI(true);
@@ -822,6 +1035,9 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
             ))}
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <IconButton title="AI Agents" onClick={() => setShowAgentManager(true)}>
+              <Wand2 size={14} />
+            </IconButton>
             <IconButton title="Share" onClick={() => {
               const shareUrl = `${window.location.origin}/workspace/${sessionId}`;
               navigator.clipboard.writeText(shareUrl);
@@ -886,42 +1102,133 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <span className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: '.12em', textTransform: 'uppercase' }}>Explorer</span>
                     <div style={{ display: 'flex', gap: 4 }}>
-                      <button onClick={() => setShowNewFileInput(true)} title="New File" style={{ padding: 4, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', borderRadius: 4 }}>
-                        <Plus size={14} />
+                      <button onClick={() => setShowNewFileInput(true)} title="New File" style={{ padding: 5, background: C.card, border: `1px solid ${C.border}`, color: C.blue, cursor: 'pointer', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <File size={12} />
+                      </button>
+                      <button onClick={() => setShowNewFolderInput(true)} title="New Folder" style={{ padding: 5, background: C.card, border: `1px solid ${C.border}`, color: C.yellow, cursor: 'pointer', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Folder size={12} />
                       </button>
                     </div>
                   </div>
-                  {showNewFileInput && (
+                  {(showNewFileInput || showNewFolderInput) && (
                     <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-                      <input value={newFileName} onChange={e => setNewFileName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreateFile()}
-                        placeholder="filename.js" autoFocus
-                        style={{ flex: 1, backgroundColor: C.bg, border: `1px solid ${C.border}`, borderRadius: 4, padding: '4px 8px', color: C.text, fontSize: 12, fontFamily: "'Fragment Mono', monospace", outline: 'none' }} />
-                      <button onClick={handleCreateFile} style={{ padding: '4px 8px', backgroundColor: C.blue, border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', fontSize: 12 }}>Add</button>
+                      <input 
+                        value={showNewFileInput ? newFileName : newFolderName} 
+                        onChange={e => showNewFileInput ? setNewFileName(e.target.value) : setNewFolderName(e.target.value)} 
+                        onKeyDown={e => { 
+                          if (e.key === 'Enter') { 
+                            showNewFileInput ? handleCreateFile() : handleCreateFolder(); 
+                          } else if (e.key === 'Escape') {
+                            setShowNewFileInput(false);
+                            setShowNewFolderInput(false);
+                          }
+                        }}
+                        placeholder={showNewFileInput ? "filename.js" : "folder name"} 
+                        autoFocus 
+                        style={{ flex: 1, backgroundColor: C.bg, border: `1px solid ${C.border}`, borderRadius: 4, padding: '4px 8px', color: C.text, fontSize: 12, fontFamily: "'Fragment Mono', monospace", outline: 'none' }} 
+                      />
+                      <button onClick={showNewFileInput ? handleCreateFile : handleCreateFolder} style={{ padding: '4px 8px', backgroundColor: C.blue, border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', fontSize: 12 }}>Create</button>
+                      <button onClick={() => { setShowNewFileInput(false); setShowNewFolderInput(false); }} style={{ padding: '4px 8px', backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: C.muted, cursor: 'pointer', fontSize: 12 }}>✕</button>
                     </div>
                   )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {allFiles.map(f => {
-                      const ext = f.name.split('.').pop() || '';
-                      const iconColor = ext === 'py' ? C.blue : ext === 'ts' || ext === 'tsx' ? C.cyan : ext === 'js' ? C.yellow : C.muted;
-                      return (
-                        <button key={f.id} onClick={() => openFile(f.id)} style={{
-                          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 6, width: '100%', textAlign: 'left',
-                          fontFamily: "'Fragment Mono', monospace", fontSize: 12,
-                          backgroundColor: f.id === activeFileId ? `rgba(76,142,255,.1)` : 'transparent',
-                          border: 'none', color: f.id === activeFileId ? C.blue : C.text, cursor: 'pointer',
-                        }}>
-                          <FileCode size={13} color={iconColor} /><span style={{ flex: 1 }}>{f.name}</span>
-                        </button>
-                      );
-                    })}
-                    {allFiles.length === 0 && <div className="mono" style={{ fontSize: 11, color: C.muted, padding: '8px' }}>No files</div>}
+                  <div style={{ flex: 1, overflow: 'auto' }}>
+                    <FileTree
+                      data={files}
+                      selectedId={activeFileId}
+                      onSelect={(node) => {
+                        if (node.type === 'file') {
+                          openFile(node.id);
+                        }
+                      }}
+                      onCreateFile={(parentId, name) => {
+                        const ext = name.includes('.') ? name.split('.').pop() : 'js';
+                        const langMap: Record<string, string> = { js: 'javascript', ts: 'typescript', py: 'python', json: 'json', html: 'html', css: 'css' };
+                        addFile({ name, type: 'file', language: langMap[ext || 'js'] || 'javascript', content: '' }, parentId || undefined);
+                      }}
+                      onCreateFolder={(parentId, name) => {
+                        addFolder(name, parentId || undefined);
+                      }}
+                      onRename={(id, newName) => {
+                        renameFile(id, newName);
+                      }}
+                      onDelete={(id) => {
+                        removeFile(id);
+                      }}
+                      onMove={(id, newParentId) => {
+                        handleMoveFile(id, newParentId);
+                      }}
+                    />
+                    {files.length === 0 && <div className="mono" style={{ fontSize: 11, color: C.muted, padding: '8px' }}>No files</div>}
                   </div>
                 </div>
 
                 <Divider />
 
                 <div style={{ padding: '10px 12px 6px' }}>
-                  <span className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: '.12em', textTransform: 'uppercase', marginBottom: 8 }}>AI Agents</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: '.12em', textTransform: 'uppercase' }}>AI Agents</span>
+                    <button
+                      onClick={() => setShowAgentManager(true)}
+                      style={{
+                        padding: 4,
+                        backgroundColor: C.card,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 4,
+                        color: C.blue,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      title="Manage AI Agents"
+                    >
+                      <Plus size={12} />
+                    </button>
+                  </div>
+                  {customAgents.map(agent => {
+                    const isCompleted = completedAgentId === agent.id;
+                    const isRunning = runningAgentId === agent.id;
+                    return (
+                      <div
+                        key={agent.id}
+                        onClick={() => { setShowAgentManager(true); }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '8px 10px',
+                          backgroundColor: isRunning ? `${agent.color}20` : C.card,
+                          border: `1px solid ${isRunning ? agent.color : C.border}`,
+                          borderRadius: 6,
+                          marginBottom: 6,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        <div style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 6,
+                          backgroundColor: agent.color,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                        }}>
+                          <Bot size={12} color="#000" />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 500, color: C.text }}>{agent.name}</div>
+                          {isRunning && <div style={{ fontSize: 10, color: C.yellow }}>Running...</div>}
+                        </div>
+                        {isCompleted && (
+                          <div style={{ color: C.green, display: 'flex', alignItems: 'center' }}>
+                            <CheckCircle size={16} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                   {AGENTS.map(agent => (
                     <AgentCard key={agent.id} agent={agent} onGenerate={handleAIGenerate} isGenerating={isGeneratingAI} />
                   ))}
@@ -990,21 +1297,22 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
             <EditorTabs />
             
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-              <div className="mono" style={{
-                padding: '16px 12px', textAlign: 'right', fontSize: 13, lineHeight: 1.7,
-                color: C.muted, backgroundColor: C.bg, flexShrink: 0, borderRight: `1px solid ${C.border}`,
-                minWidth: 48, userSelect: 'none', overflowY: 'auto',
-              }}>
-                {(currentFile?.content || '').split('\n').map((_: any, i: number) => <div key={i}>{i + 1}</div>)}
-              </div>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
-                <CollaborativeEditor 
-                  projectId={sessionId} 
-                  user={currentUser}
-                  onUsersChange={setConnectedUsers}
-                  onConnectionChange={setIsWsConnected}
-                  onSetContent={setEditorSetContentFn}
-                />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', backgroundColor: currentFile ? 'transparent' : C.bg }}>
+                {currentFile ? (
+                  <CollaborativeEditor 
+                    projectId={sessionId} 
+                    user={currentUser}
+                    onUsersChange={setConnectedUsers}
+                    onConnectionChange={setIsWsConnected}
+                    onSetContent={setEditorSetContentFn}
+                  />
+                ) : (
+                  <WelcomeScreen 
+                    onNewFile={() => { setShowNewFileInput(true); setActiveRail('files'); }}
+                    onNewFolder={() => { setShowNewFolderInput(true); setActiveRail('files'); }}
+                    onOpenSettings={() => {}}
+                  />
+                )}
                 {pendingBlocks.length > 0 && (
                   <div style={{ position: 'absolute', bottom: 8, right: 8, display: 'flex', flexDirection: 'column', gap: 8, zIndex: 100 }}>
                     {pendingBlocks.map(block => (
@@ -1071,6 +1379,36 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
           isOpen={previewOpen}
           onClose={() => setPreviewOpen(false)}
         />
+
+        {showAgentManager && (
+          <CustomAgentManager
+            projectId={sessionId || ''}
+            files={getFilesForContext()}
+            onClose={() => setShowAgentManager(false)}
+            onAgentsChange={fetchCustomAgents}
+            onRunAgent={(agent) => {
+              setRunningAgentId(agent.id);
+              setCompletedAgentId(null);
+            }}
+            runningAgentId={runningAgentId}
+            completedAgentId={completedAgentId}
+            onAgentResult={(result) => {
+              if (result.success) {
+                addAIBlock({
+                  agentId: 'custom-agent',
+                  agentName: result.agentName,
+                  content: result.content,
+                  status: 'pending',
+                  startLine: 0,
+                  endLine: 0,
+                });
+                setRunningAgentId(null);
+                setCompletedAgentId(runningAgentId);
+                addTermLine('info', `✓ AI Agent "${result.agentName}" completed - review suggestion`);
+              }
+            }}
+          />
+        )}
 
         {toast && (
           <div className="mono" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 18px', fontSize: 12, color: C.text, zIndex: 9998, whiteSpace: 'nowrap' }}>

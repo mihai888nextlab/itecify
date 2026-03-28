@@ -25,6 +25,7 @@ interface EditorState {
   addFolder: (name: string, parentId?: string) => void;
   removeFile: (fileId: string) => void;
   renameFile: (fileId: string, newName: string) => void;
+  moveFile: (fileId: string, newParentId: string | null) => void;
   updateFileContent: (fileId: string, content: string) => void;
   toggleFolder: (folderId: string) => void;
   closeFile: (fileId: string) => void;
@@ -155,9 +156,9 @@ export const useEditorStore = create<EditorState>()(
         set({ isLoadingFiles: true, currentProjectId: projectId });
         const files = await loadProjectFiles(projectId);
         if (files.length > 0) {
-          set({ files, openFiles: files[0] ? [files[0].id] : [], activeFileId: files[0]?.id || null });
+          set({ files, openFiles: [], activeFileId: null });
         } else {
-          set({ files: defaultFiles, openFiles: ['index'], activeFileId: 'index' });
+          set({ files: defaultFiles, openFiles: [], activeFileId: null });
         }
         set({ isLoadingFiles: false });
       },
@@ -187,6 +188,8 @@ export const useEditorStore = create<EditorState>()(
               name: fileData.name,
               content: fileData.content || '',
               language: fileData.language || 'javascript',
+              isFolder: false,
+              parentId: parentId || null,
             }),
           }).catch(err => console.error('Failed to save file:', err));
         }
@@ -194,12 +197,27 @@ export const useEditorStore = create<EditorState>()(
       },
 
       addFolder: (name, parentId) => {
+        const state = get();
+        const effectiveProjectId = state.currentProjectId;
         const newFiles = addFolderToTree(get().files, name, parentId);
         set({ files: newFiles });
+        
+        if (effectiveProjectId) {
+          fetch(`${API_URL}/api/projects/${effectiveProjectId}/files`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('accessToken')}` },
+            body: JSON.stringify({
+              name,
+              isFolder: true,
+              parentId: parentId || null,
+            }),
+          }).catch(err => console.error('Failed to create folder:', err));
+        }
       },
 
       removeFile: (fileId) => {
-        const file = findFile(get().files, fileId);
+        const state = get();
+        const file = findFile(state.files, fileId);
         if (file?.type === 'folder' && file.children) {
           const idsToRemove = [fileId];
           const collectIds = (nodes: FileNode[]) => {
@@ -210,21 +228,60 @@ export const useEditorStore = create<EditorState>()(
           };
           collectIds(file.children);
           set({
-            files: removeFromTree(get().files, fileId),
-            openFiles: get().openFiles.filter(id => !idsToRemove.includes(id)),
+            files: removeFromTree(state.files, fileId),
+            openFiles: state.openFiles.filter(id => !idsToRemove.includes(id)),
           });
         } else {
           set({
-            files: removeFromTree(get().files, fileId),
-            openFiles: get().openFiles.filter(id => id !== fileId),
+            files: removeFromTree(state.files, fileId),
+            openFiles: state.openFiles.filter(id => id !== fileId),
           });
+        }
+        
+        if (state.currentProjectId && file) {
+          fetch(`${API_URL}/api/projects/${state.currentProjectId}/files/${fileId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('accessToken')}` },
+          }).catch(err => console.error('Failed to delete file:', err));
         }
       },
 
       renameFile: (fileId, newName) => {
+        const state = get();
+        const file = findFile(state.files, fileId);
+        if (!file) return;
+        
         set({
-          files: get().files.map(node => renameInTree(node, fileId, newName)),
+          files: state.files.map(node => renameInTree(node, fileId, newName)),
         });
+        
+        if (state.currentProjectId) {
+          fetch(`${API_URL}/api/projects/${state.currentProjectId}/files/${fileId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('accessToken')}` },
+            body: JSON.stringify({ name: newName }),
+          }).catch(err => console.error('Failed to rename file:', err));
+        }
+      },
+
+      moveFile: (fileId, newParentId) => {
+        const state = get();
+        const file = findFile(state.files, fileId);
+        if (!file) return;
+        
+        const newFiles = removeFromTree(state.files, fileId);
+        const movedFile = { ...file, parentId: newParentId };
+        const newFilesWithMoved = addFileToTree(newFiles, movedFile, newParentId || undefined);
+        
+        set({ files: newFilesWithMoved });
+        
+        if (state.currentProjectId) {
+          fetch(`${API_URL}/api/projects/${state.currentProjectId}/files/${fileId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('accessToken')}` },
+            body: JSON.stringify({ parentId: newParentId }),
+          }).catch(err => console.error('Failed to move file:', err));
+        }
       },
 
       updateFileContent: (fileId, content) => {
@@ -300,7 +357,7 @@ export const loadProjectFiles = async (projectId: string): Promise<FileNode[]> =
   if (!token) return [];
   
   try {
-    const res = await fetch(`${API_URL}/api/projects/${projectId}/files`, {
+    const res = await fetch(`${API_URL}/api/projects/${projectId}/files?tree=true`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) return [];
@@ -310,9 +367,11 @@ export const loadProjectFiles = async (projectId: string): Promise<FileNode[]> =
     return data.map((file: any) => ({
       id: file.id,
       name: file.name,
-      type: 'file',
+      type: file.type || 'file',
       language: file.language || 'javascript',
       content: file.content || '',
+      children: file.children || undefined,
+      isOpen: false,
     }));
   } catch {
     return [];

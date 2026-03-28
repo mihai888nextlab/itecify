@@ -236,3 +236,11 @@ body {
 .resizer:hover {
   background: var(--accent-blue);
 }
+
+[data-radix-context-menu-trigger] {
+  cursor: context-menu;
+}
+
+[data-radix-popper-content-wrapper] {
+  z-index: 9999 !important;
+}

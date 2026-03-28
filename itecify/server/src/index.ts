@@ -10,6 +10,7 @@ import projectRoutes from './routes/projects.js';
 import collaborationRoutes from './routes/collaboration.js';
 import executionRoutes from './routes/execution.js';
 import aiRoutes from './routes/ai.js';
+import agentRoutes from './routes/agents.js';
 import terminalRoutes from './routes/terminal.js';
 
 async function start() {
@@ -42,6 +43,7 @@ async function start() {
   await fastify.register(collaborationRoutes, { prefix: '/api/collaborate' });
   await fastify.register(executionRoutes, { prefix: '/api/execute' });
   await fastify.register(aiRoutes, { prefix: '/api/ai' });
+  await fastify.register(agentRoutes, { prefix: '/api/agents' });
   await fastify.register(terminalRoutes, { prefix: '/api/terminal' });
 
   // Google OAuth
