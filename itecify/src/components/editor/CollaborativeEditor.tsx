@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useSessionStore, AIBlock, User } from '@/stores/sessionStore';
 import { useEditorStore, FileNode } from '@/stores/editorStore';
 import { Bot, Check, X, ChevronDown, ChevronRight, Move } from 'lucide-react';
+import { CollabErrorBoundary } from './CollabErrorBoundary';
 
 const iTECifyTheme = EditorView.theme({
   '&': {
@@ -106,6 +107,20 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   onUsersChangeRef.current = onUsersChange;
   onConnectionChangeRef.current = onConnectionChange;
   onSetContentRef.current = onSetContent;
+
+  useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      if (event.message?.includes('rightID') || event.message?.includes("can't access property \"client\"")) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      return false;
+    };
+    
+    window.addEventListener('error', handleError as unknown as EventListener);
+    return () => window.removeEventListener('error', handleError as unknown as EventListener);
+  }, []);
 
   useEffect(() => {
     if (activeFileId && ytextMapRef.current.size > 0) {
@@ -214,36 +229,35 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         yFilesMap.forEach((value: any, key: string) => {
           if (key === '_meta') return;
           if (value === null) return;
-          const fileData = typeof value === 'string' ? JSON.parse(value) : value;
-          yjsFiles.push(fileData);
+          try {
+            const fileData = typeof value === 'string' ? JSON.parse(value) : value;
+            if (fileData && fileData.id) {
+              yjsFiles.push(fileData);
+            }
+          } catch (e) {
+            console.warn('Failed to parse file from Yjs:', e);
+          }
         });
 
-        const localIds = new Set<string>();
-        const collectLocalIds = (files: FileNode[]) => {
-          files.forEach(f => {
-            localIds.add(f.id);
-            if (f.children) collectLocalIds(f.children);
-          });
-        };
-        collectLocalIds(editorStore.files);
-
-        const yjsIds = new Set(yjsFiles.map(f => f.id));
-        const localFilesHaveContent = editorStore.files.some(f => f.content && f.content.length > 0);
+        const localFiles = editorStore.files;
+        const localFilesHaveContent = localFiles.length > 0 && localFiles.some(f => f.content && f.content.length > 0);
         
-        if (localFilesHaveContent && yjsFiles.length === 0 && localIds.size > 0) {
+        if (localFilesHaveContent && yjsFiles.length === 0) {
           return;
         }
 
-        let needsUpdate = false;
-        const allIds = new Set([...localIds, ...yjsFiles.map(f => f.id)]);
-        
-        allIds.forEach(id => {
-          const inLocal = editorStore.files.some(f => f.id === id);
-          const inYjs = yjsFiles.some(f => f.id === id);
-          if (inLocal !== inYjs) needsUpdate = true;
-        });
-
-        if (needsUpdate || editorStore.files.length !== yjsFiles.length) {
+        if (yjsFiles.length > 0 && localFilesHaveContent) {
+          const mergedFiles = [...localFiles];
+          
+          yjsFiles.forEach(yjsFile => {
+            const existsInLocal = mergedFiles.some(f => f.id === yjsFile.id);
+            if (!existsInLocal) {
+              mergedFiles.push(yjsFile);
+            }
+          });
+          
+          useEditorStore.setState({ files: mergedFiles });
+        } else if (yjsFiles.length > 0) {
           useEditorStore.setState({ files: yjsFiles });
         }
       };
@@ -267,26 +281,30 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         });
 
         provider.awareness.on('change', () => {
-          const states = provider.awareness?.getStates();
-          if (!states) return;
-          const users: User[] = [];
-          const localClientId = ydoc?.clientID;
-          states.forEach((state: any, clientId: number) => {
-            if (state.user && localClientId !== undefined && clientId !== localClientId) {
-              const existing = users.find(u => u.name === state.user.name);
-              if (!existing) {
-                users.push({
-                  id: String(clientId),
-                  name: state.user.name || 'Anonymous',
-                  color: state.user.color || '#3b82f6',
-                  role: 'human',
-                  cursorPosition: state.cursor,
-                });
+          try {
+            const states = provider.awareness?.getStates();
+            if (!states) return;
+            const users: User[] = [];
+            const localClientId = ydoc?.clientID;
+            states.forEach((state: any, clientId: number) => {
+              if (state.user && localClientId !== undefined && clientId !== localClientId) {
+                const existing = users.find(u => u.name === state.user.name);
+                if (!existing) {
+                  users.push({
+                    id: String(clientId),
+                    name: state.user.name || 'Anonymous',
+                    color: state.user.color || '#3b82f6',
+                    role: 'human',
+                    cursorPosition: state.cursor,
+                  });
+                }
               }
-            }
-          });
-          setConnectedUsers(users);
-          onUsersChangeRef.current?.(users);
+            });
+            setConnectedUsers(users);
+            onUsersChangeRef.current?.(users);
+          } catch (e) {
+            console.warn('Awareness change error:', e);
+          }
         });
       }
 
@@ -495,6 +513,10 @@ greet('iTEC 2026');
               })
             );
           }
+          
+          if (state.files !== prevState.files) {
+            syncFilesToYjs();
+          }
         }
       );
 
@@ -538,7 +560,9 @@ greet('iTEC 2026');
   return (
     <div className="relative h-full flex flex-col bg-[#020617]">
       <div className="flex-1 overflow-hidden relative">
-        <div ref={editorRef} className="h-full" />
+        <CollabErrorBoundary>
+          <div ref={editorRef} className="h-full" />
+        </CollabErrorBoundary>
         {!isCollabReady && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#020617]">
             <div className="flex flex-col items-center gap-3">

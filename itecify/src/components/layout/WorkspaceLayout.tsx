@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { CollaborativeEditor } from '@/components/editor/CollaborativeEditor';
+import { PreviewPanel } from '@/components/preview/PreviewPanel';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEditorStore } from '@/stores/editorStore';
 import {
@@ -350,6 +351,7 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [newFileName, setNewFileName] = useState('');
   const [connectedUsers, setConnectedUsers] = useState<any[]>([]);
   const [isWsConnected, setIsWsConnected] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const toastRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const { isExecuting, setExecuting, settings, addAIBlock, aiBlocks, updateAIBlock, removeAIBlock, setUsers, setConnected } = useSessionStore();
@@ -537,7 +539,7 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const handleCreateFile = () => {
     if (newFileName.trim()) {
       const ext = newFileName.includes('.') ? newFileName.split('.').pop() : 'js';
-      const langMap: Record<string, string> = { js: 'javascript', ts: 'typescript', py: 'python', json: 'json' };
+      const langMap: Record<string, string> = { js: 'javascript', ts: 'typescript', py: 'python', json: 'json', html: 'html', css: 'css' };
       addFile({ name: newFileName.trim(), type: 'file', language: langMap[ext || 'js'] || 'javascript', content: '' });
       setNewFileName('');
       setShowNewFileInput(false);
@@ -615,7 +617,28 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
               navigator.clipboard.writeText(shareUrl);
               showToast('Link copied to clipboard!');
             }}><Copy size={14} /></IconButton>
-            <IconButton title="Preview"><ExternalLink size={14} /></IconButton>
+            {currentFile?.name?.endsWith('.html') && (
+              <button
+                onClick={() => setPreviewOpen(!previewOpen)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  backgroundColor: previewOpen ? `${C.cyan}30` : C.card,
+                  border: `1px solid ${previewOpen ? C.cyan : C.border}`,
+                  borderRadius: 6,
+                  padding: '0 10px',
+                  height: 28,
+                  fontFamily: "'Syne', sans-serif",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: previewOpen ? C.cyan : C.text,
+                  cursor: 'pointer',
+                }}
+              >
+                <Eye size={14} /> Preview
+              </button>
+            )}
             <IconButton title="Settings"><Settings size={14} /></IconButton>
             <div style={{ width: 1, height: 20, backgroundColor: C.border, margin: '0 4px' }} />
             {isExecuting ? (
@@ -832,6 +855,12 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
             </div>
           </div>
         </div>
+
+        <PreviewPanel
+          htmlContent={currentFile?.content || '<html><body><p style="color:#666;font-family:sans-serif;padding:20px;">No HTML content to preview</p></body></html>'}
+          isOpen={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+        />
 
         {toast && (
           <div className="mono" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 18px', fontSize: 12, color: C.text, zIndex: 9998, whiteSpace: 'nowrap' }}>
