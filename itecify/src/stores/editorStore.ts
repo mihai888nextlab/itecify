@@ -9,6 +9,7 @@ export interface FileNode {
   content?: string;
   children?: FileNode[];
   isOpen?: boolean;
+  parentId?: string | null;
 }
 
 interface EditorState {

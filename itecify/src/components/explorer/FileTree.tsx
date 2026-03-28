@@ -153,7 +153,7 @@ export function FileTree({
       ? C.yellow
       : (FILE_ICONS[node.data.language || 'default']?.color || C.muted);
 
-    const indentSize = 8;
+    const indentSize = 24;
 
     return (
       <div
@@ -185,7 +185,6 @@ export function FileTree({
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
-          marginLeft: level === 0 ? 0 : -indentSize,
         }}>
           {isFolder ? (
             node.isOpen ? <ChevronDown size={14} color={C.muted} /> : <ChevronRight size={14} color={C.muted} />
@@ -298,7 +297,7 @@ export function FileTree({
         data={data}
         width={240}
         height={600}
-        indent={8}
+        indent={24}
         rowHeight={22}
         overscanCount={10}
         openByDefault={false}

@@ -207,36 +207,40 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         if (isLocalChange) return;
         isLocalChange = true;
         
-        try {
-          const storeFiles = useEditorStore.getState().files;
-          const newFiles = [...storeFiles];
-          const processedIds = new Set<string>();
-          
-          yFilesMap.forEach((value: any, key: string) => {
-            if (key === '_meta') return;
-            processedIds.add(key);
-            
-            const remoteFile: FileNode = value;
-            const existingIndex = newFiles.findIndex(f => f.id === key);
-            
-            if (existingIndex === -1) {
-              newFiles.push(remoteFile);
-              console.log('[Sync] File added from Yjs:', remoteFile.name);
-            } else {
-              newFiles[existingIndex] = remoteFile;
+        const filesMap = new Map<string, FileNode>();
+        
+        yFilesMap.forEach((value: any, key: string) => {
+          if (key === '_meta') return;
+          filesMap.set(key, value);
+        });
+        
+        const buildTree = (parentId: string | null): FileNode[] => {
+          const result: FileNode[] = [];
+          filesMap.forEach((file, id) => {
+            const fileParentId = (file as any).parentId || null;
+            if (fileParentId === parentId) {
+              if (file.type === 'folder') {
+                const folder: FileNode = { ...file, children: buildTree(id) };
+                result.push(folder);
+              } else {
+                result.push(file);
+              }
             }
           });
-          
-          const idsToRemove: string[] = [];
-          newFiles.forEach((file, index) => {
-            if (!processedIds.has(file.id)) {
-              idsToRemove.push(String(index));
-            }
+          return result;
+        };
+        
+        const newFiles = buildTree(null);
+        const localFiles = useEditorStore.getState().files;
+        
+        if (JSON.stringify(newFiles) !== JSON.stringify(localFiles)) {
+          console.log('[Sync] Files synced from Yjs:', newFiles.length, 'items');
+          // Defer the store update to allow syncFilesToYjs to run first
+          requestAnimationFrame(() => {
+            useEditorStore.setState({ files: newFiles });
+            isLocalChange = false;
           });
-          idsToRemove.reverse().forEach(idx => newFiles.splice(parseInt(idx), 1));
-          
-          useEditorStore.setState({ files: newFiles });
-        } finally {
+        } else {
           isLocalChange = false;
         }
       };
@@ -257,6 +261,7 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
       await new Promise<void>((resolve) => {
         provider.on('synced', () => {
           console.log('[Collab] Initial sync complete');
+          syncFilesFromYjs();
           resolve();
         });
         setTimeout(resolve, 2000);
@@ -351,12 +356,13 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         
         const currentIds = new Set<string>();
         
-        const flattenFiles = (files: FileNode[]): FileNode[] => {
+        const flattenFiles = (files: FileNode[], parentId: string | null = null): FileNode[] => {
           const result: FileNode[] = [];
           for (const file of files) {
-            result.push({ ...file, children: undefined });
+            const fileWithParent = { ...file, children: undefined, parentId };
+            result.push(fileWithParent);
             if (file.children) {
-              result.push(...flattenFiles(file.children));
+              result.push(...flattenFiles(file.children, file.id));
             }
           }
           return result;
@@ -365,8 +371,9 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
         const flatFiles = flattenFiles(editorFiles);
         const fileMap = new Map(flatFiles.map(f => [f.id, f]));
         
+        flatFiles.forEach(f => currentIds.add(f.id));
+        
         fileMap.forEach((file, id) => {
-          currentIds.add(id);
           const existing = yFilesMap.get(id);
           const fileStr = JSON.stringify(file);
           if (!existing || JSON.stringify(existing) !== fileStr) {
@@ -380,6 +387,12 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
             idsToDelete.push(key);
           }
         });
+        
+        console.log('[Sync] Syncing to Yjs:', { currentIds: [...currentIds], idsToDelete });
+        
+        if (idsToDelete.length > 0) {
+          console.log('[Sync] Deleting from Yjs:', idsToDelete);
+        }
         idsToDelete.forEach(id => yFilesMap.delete(id));
         
         isLocalChange = false;
@@ -539,6 +552,7 @@ greet('iTEC 2026');
           }
           
           if (state.files !== prevState.files) {
+            console.log('[Subscription] Files changed, triggering sync');
             syncFilesToYjs();
           }
         }

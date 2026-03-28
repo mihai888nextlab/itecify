@@ -63,7 +63,7 @@ function FileItem({ node, depth = 0, onRename }: { node: FileNode; depth?: numbe
         className={`flex items-center gap-1 px-2 py-1 cursor-pointer rounded-md transition group ${
           isActive ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-slate-800 text-slate-300'
         }`}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        style={{ paddingLeft: `${depth * 32}px` }}
         onClick={() => {
           if (isFolder) {
             toggleFolder(node.id);
@@ -73,10 +73,11 @@ function FileItem({ node, depth = 0, onRename }: { node: FileNode; depth?: numbe
         }}
       >
         {isFolder && (
-          <span className="text-slate-500">
+          <span className="text-slate-500" style={{ width: 14 }}>
             {node.isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </span>
         )}
+        {!isFolder && <span style={{ width: 14 }} />}
         {isFolder ? (
           node.isOpen ? (
             <FolderOpen size={14} className="text-amber-400" />
@@ -123,6 +124,14 @@ function FileItem({ node, depth = 0, onRename }: { node: FileNode; depth?: numbe
             <Trash2 size={14} />
             Delete
           </button>
+        </div>
+      )}
+
+      {isFolder && node.isOpen && node.children && (
+        <div className="children-container">
+          {node.children.map(child => (
+            <FileItem key={child.id} node={child} depth={depth + 1} onRename={onRename} />
+          ))}
         </div>
       )}
     </div>
