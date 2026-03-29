@@ -770,46 +770,65 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     const handleContainerFilesSynced = (event: CustomEvent) => {
       const containerFiles = event.detail as { name: string; content: string; path: string; type: 'file' | 'directory' }[];
       
-      // Find folder by path in nested tree, return parentId and folder info
-      const findFolderByPath = (nodes: any[], targetPath: string): { parentId: string | undefined; exists: boolean } => {
-        const pathParts = targetPath.split('/');
-        
-        // Start at root level
-        let currentLevel = nodes;
-        let parentId: string | undefined = undefined;
+      if (!containerFiles || containerFiles.length === 0) {
+        console.log('[Sync] No files to sync from container');
+        return;
+      }
+      
+      console.log('[Sync] Syncing', containerFiles.length, 'items from container');
+      
+      // Build a map of existing folders by path for quick lookup
+      const buildFolderMap = (nodes: any[], basePath: string = ''): Map<string, any> => {
+        const map = new Map<string, any>();
+        for (const node of nodes) {
+          const nodePath = basePath ? `${basePath}/${node.name}` : node.name;
+          if (node.type === 'folder') {
+            map.set(nodePath, node);
+            const childMap = buildFolderMap(node.children || [], nodePath);
+            childMap.forEach((v, k) => map.set(k, v));
+          }
+        }
+        return map;
+      };
+      
+      const folderMap = buildFolderMap(files);
+      
+      // Create missing folders and return the parent folder id for a path
+      const ensureFoldersForPath = (filePath: string): string | undefined => {
+        const parts = filePath.split('/');
         let currentPath = '';
+        let parentId: string | undefined = undefined;
         
-        for (let i = 0; i < pathParts.length; i++) {
-          const part = pathParts[i];
+        for (let i = 0; i < parts.length - 1; i++) {
+          const part = parts[i];
           currentPath = currentPath ? `${currentPath}/${part}` : part;
           
-          // Find this part in current level
-          const found = currentLevel.find((node: any) => node.name === part && node.type === 'folder');
+          if (!folderMap.has(currentPath)) {
+            // Create this folder
+            addFolder(part, parentId);
+            // Note: addFolder is async, but we can't await in a loop
+            // The folder will be created and will appear on next render
+          }
           
-          if (found) {
-            // Move into this folder
-            parentId = found.id;
-            currentLevel = found.children || [];
-          } else {
-            // Folder doesn't exist, need to create it
-            return { parentId, exists: false };
+          // Find the folder after creation
+          const folder = folderMap.get(currentPath);
+          if (folder) {
+            parentId = folder.id;
           }
         }
         
-        return { parentId, exists: true };
+        return parentId;
       };
       
-      // Find file by path in nested tree
-      const findFileByPath = (nodes: any[], targetPath: string): any => {
-        const pathParts = targetPath.split('/');
-        const fileName = pathParts.pop();
-        let currentLevel = nodes;
-        let parentId: string | undefined = undefined;
+      // Find existing file by path
+      const findFileByPath = (targetPath: string): any => {
+        const parts = targetPath.split('/');
+        const fileName = parts.pop();
+        let currentLevel = files;
         
-        for (const part of pathParts) {
-          const folder = currentLevel.find((node: any) => node.name === part && node.type === 'folder');
+        for (const part of parts) {
+          const folder = folderMap.get(part);
           if (folder) {
-            parentId = folder.id;
             currentLevel = folder.children || [];
           } else {
             return null;
@@ -827,32 +846,37 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
         return a.path.split('/').length - b.path.split('/').length;
       });
       
-      // Process files in order
+      // Process files - only add missing files, don't overwrite existing content
       for (const containerFile of sortedFiles) {
         if (containerFile.type === 'directory') {
-          const { parentId, exists } = findFolderByPath(files, containerFile.path);
-          if (!exists) {
-            addFolder(containerFile.name, parentId);
-          }
-        } else {
-          const existingFile = findFileByPath(files, containerFile.path);
-          if (!existingFile) {
-            // Find the parent folder
-            const pathParts = containerFile.path.split('/');
-            const fileName = pathParts.pop();
-            const { parentId } = findFolderByPath(files, pathParts.join('/'));
-            const language = getLanguageFromFileName(fileName || containerFile.name);
-            addFile({
-              name: fileName || containerFile.name,
-              type: 'file',
-              language,
-              content: containerFile.content,
-            }, parentId, sessionId);
-          } else if (existingFile.content !== containerFile.content) {
-            updateFileContent(existingFile.id, containerFile.content);
-          }
+          // Skip directories - we'll create them via ensureFoldersForPath
+          continue;
         }
+        
+        const existingFile = findFileByPath(containerFile.path);
+        if (!existingFile) {
+          // Create missing folders if needed
+          ensureFoldersForPath(containerFile.path);
+          
+          // Get the file name from the path
+          const pathParts = containerFile.path.split('/');
+          const fileName = pathParts.pop() || containerFile.name;
+          const parentPath = pathParts.join('/');
+          const parentFolder = parentPath ? folderMap.get(parentPath) : null;
+          
+          const language = getLanguageFromFileName(fileName);
+          addFile({
+            name: fileName,
+            type: 'file',
+            language,
+            content: containerFile.content,
+          }, parentFolder?.id, sessionId);
+        }
+        // Note: We intentionally don't update existing file content from container
+        // This prevents overwriting user changes with container state
       }
+      
+      console.log('[Sync] Done syncing from container');
     };
     
     window.addEventListener('container-files-synced', handleContainerFilesSynced as EventListener);

@@ -287,57 +287,45 @@ async function getAllPathsRecursive(containerName: string, dirPath: string): Pro
   const allPaths: string[] = [];
   
   try {
-    // Use docker exec without shell to avoid Windows Git Bash path mangling
-    // First try: list files with ls -1 (one per line)
-    let lsOutput = '';
-    try {
-      const result = await execAsync(
-        `docker exec ${containerName} ls -1 "${dirPath}"`,
-        { timeout: 10000 }
-      );
-      lsOutput = result.stdout;
-    } catch {
-      // Try with ls -la
-      const result = await execAsync(
-        `docker exec ${containerName} ls -la "${dirPath}"`,
-        { timeout: 10000 }
-      );
-      lsOutput = result.stdout;
-    }
+    // Always use ls -la to get file type info
+    const result = await execAsync(
+      `docker exec ${containerName} ls -la "${dirPath}"`,
+      { timeout: 10000 }
+    );
     
+    const lsOutput = result.stdout;
     if (!lsOutput) return [];
     
-    const lines = lsOutput.split('\n').filter(l => l.trim());
+    const lines = lsOutput.split('\n');
     
     for (const line of lines) {
       const trimmed = line.trim();
-      // Skip total, ., .., and special entries
-      if (!trimmed || trimmed === 'total' || trimmed === '.' || trimmed === '..') continue;
-      // Skip lines that don't look like file/dir names
-      if (trimmed.includes('Permission denied')) continue;
+      if (!trimmed || trimmed === 'total') continue;
       
-      // Parse ls -la format: drwxr-xr-x 2 root root 4096 Jan  1 00:00 dirname
-      // or -rw-r--r-- 1 root root 1234 Jan  1 00:00 filename
+      // Parse ls -la format
+      // drwxr-xr-x 2 root root 4096 Jan  1 00:00 dirname  (directory)
+      // -rw-r--r-- 1 root root 1234 Jan  1 00:00 filename.js  (file)
       const parts = trimmed.split(/\s+/);
+      if (parts.length < 8) continue;
+      
+      const perms = parts[0];
       const lastPart = parts[parts.length - 1];
       
       if (!lastPart || lastPart === '.' || lastPart === '..') continue;
+      if (perms === 'total') continue;
       
-      // Check if directory (starts with d) or regular file (starts with -)
-      const isDir = trimmed.startsWith('d');
+      const isDir = perms.startsWith('d');
       
-      if (isDir && lastPart !== '.') {
+      if (isDir) {
         // Recursively get files from subdirectory
         const subPath = `${dirPath}/${lastPart}`;
+        if (lastPart === 'node_modules') continue;
         const subFiles = await getAllPathsRecursive(containerName, subPath);
         for (const sf of subFiles) {
           allPaths.push(`${lastPart}/${sf}`);
         }
-      } else if (!isDir && lastPart.includes('.')) {
-        // Regular file with extension
-        allPaths.push(lastPart);
-      } else if (!isDir && !lastPart.includes('.') && parts.length >= 5) {
-        // File without extension (like Makefile, Dockerfile)
+      } else {
+        // Regular file - include all files regardless of extension
         allPaths.push(lastPart);
       }
     }
@@ -364,7 +352,7 @@ export async function readAllContainerFiles(
     // Try multiple methods to get file list
     const allPaths = await getAllPathsRecursive(container.name, workDir);
     
-    console.log(`[DockerService] Found ${allPaths.length} paths in container`);
+    console.log(`[DockerService] Found ${allPaths.length} paths in container:`, allPaths.slice(0, 20));
     
     // Collect directories and filter files
     for (const relativePath of allPaths) {
@@ -396,6 +384,8 @@ export async function readAllContainerFiles(
     }
     
     // Add files with content
+    let successCount = 0;
+    let failCount = 0;
     for (const relativePath of allPaths) {
       if (!relativePath || relativePath.includes('node_modules')) continue;
       
@@ -407,24 +397,26 @@ export async function readAllContainerFiles(
       
       try {
         const { stdout: content } = await execAsync(
-          `docker exec ${container.name} cat "${fullPath}" 2>/dev/null || echo ""`,
+          `docker exec ${container.name} cat "${fullPath}"`,
           { timeout: 5000 }
         );
         
-        if (content !== undefined) {
-          files.push({
-            name: filename,
-            content: content,
-            path: relativePath,
-            type: 'file',
-          });
-        }
+        files.push({
+          name: filename,
+          content: content,
+          path: relativePath,
+          type: 'file',
+        });
+        successCount++;
       } catch (err: any) {
-        console.log(`[DockerService] Failed to read ${filename}:`, err.message);
+        failCount++;
+        if (failCount <= 5) {
+          console.log(`[DockerService] Failed to read ${fullPath}:`, err.message);
+        }
       }
     }
     
-    console.log(`[DockerService] Read ${files.length} items (${dirSet.size} dirs, ${files.filter(f => f.type === 'file').length} files)`);
+    console.log(`[DockerService] Read ${files.length} items (${dirSet.size} dirs, ${successCount} files OK, ${failCount} failed)`);
     return files;
   } catch (error: any) {
     console.error(`[DockerService] Failed to read all files:`, error.message);
