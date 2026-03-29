@@ -503,6 +503,7 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const [activeRail, setActiveRail] = useState('files');
   const [hoveredRail, setHoveredRail] = useState<string | null>(null);
   const [showAgentManager, setShowAgentManager] = useState(false);
+  const [easterEggActive, setEasterEggActive] = useState(false);
   const [customAgents, setCustomAgents] = useState<any[]>([]);
   const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
   const [completedAgentId, setCompletedAgentId] = useState<string | null>(null);
@@ -1216,6 +1217,19 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     
     if (cmd === 'status') {
       addTermLine('info', `Status: ${isExecuting ? 'Running' : 'Idle'}`);
+      return;
+    }
+    
+    if (cmd === '14') {
+      setEasterEggActive(true);
+      addTermLine('ok', '🎮 You found the secret!');
+      addTermLine('info', 'Activating super mode...');
+      setTimeout(() => {
+        addTermLine('ok', '✨✨✨ SUPER I-TEC MODE ACTIVATED! ✨✨✨');
+        addTermLine('info', 'The coding powers are now at maximum!');
+        showToast('🌟 SECRET UNLOCKED! 🌟');
+        setTimeout(() => setEasterEggActive(false), 3000);
+      }, 500);
       return;
     }
     
@@ -1992,6 +2006,41 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
         {toast && (
           <div className="mono" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 18px', fontSize: 12, color: C.text, zIndex: 9998, whiteSpace: 'nowrap' }}>
             {toast}
+          </div>
+        )}
+
+        {easterEggActive && (
+          <div style={{ 
+            position: 'fixed', 
+            inset: 0, 
+            pointerEvents: 'none', 
+            zIndex: 9999,
+            background: 'radial-gradient(circle at center, rgba(76,142,255,0.1) 0%, transparent 70%)',
+            animation: 'pulse 0.5s ease-in-out infinite',
+          }}>
+            <style>{`
+              @keyframes pulse {
+                0%, 100% { opacity: 0.3; }
+                50% { opacity: 0.8; }
+              }
+              @keyframes rainbow {
+                0% { filter: hue-rotate(0deg); }
+                100% { filter: hue-rotate(360deg); }
+              }
+            `}</style>
+            <div style={{ 
+              position: 'absolute', 
+              top: '50%', 
+              left: '50%', 
+              transform: 'translate(-50%, -50%)',
+              fontSize: 48,
+              fontWeight: 'bold',
+              color: C.cyan,
+              textShadow: `0 0 20px ${C.cyan}, 0 0 40px ${C.cyan}`,
+              animation: 'rainbow 2s linear infinite',
+            }}>
+              ✨ I-TEC SUPER MODE ✨
+            </div>
           </div>
         )}
       </div>
