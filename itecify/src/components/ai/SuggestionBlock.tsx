@@ -1,11 +1,23 @@
 'use client';
 
 import React, { useState } from 'react';
-import { CheckCircle, X, Edit2, Sparkles, Code2 } from 'lucide-react';
-import type { Suggestion } from '@/contexts/AICopilotContext';
+import { CheckCircle, X, Edit2, Sparkles, ArrowRight } from 'lucide-react';
+
+interface ChangedLine {
+  lineNumber: number;
+  original: string;
+  fixed: string;
+}
+
+interface AICopilotSuggestion {
+  id: string;
+  fixedCode: string;
+  changes: ChangedLine[];
+  intent: string;
+}
 
 interface SuggestionBlockProps {
-  suggestion: Suggestion | null;
+  suggestion: AICopilotSuggestion | null;
   onAccept: () => void;
   onReject: () => void;
   onModify: (code: string) => void;
@@ -14,18 +26,12 @@ interface SuggestionBlockProps {
 const C = {
   purple: '#a855f7',
   green: '#22c55e',
+  red: '#ef4444',
   card: '#1e1e1e',
   bg: '#0d1117',
   border: '#333',
   muted: '#666',
   text: '#f1f5f9',
-};
-
-const typeColors: Record<string, string> = {
-  refactor: '#a855f7',
-  optimize: '#22c55e',
-  fix: '#ef4444',
-  explain: '#3b82f6',
 };
 
 export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: SuggestionBlockProps) {
@@ -35,7 +41,7 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
   if (!suggestion) return null;
 
   const handleModify = () => {
-    setEditedCode(suggestion.code);
+    setEditedCode(suggestion.fixedCode);
     setIsEditing(true);
   };
 
@@ -61,8 +67,8 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
         border: `1px solid ${C.purple}`,
         borderRadius: '14px',
         zIndex: 100,
-        minWidth: '320px',
-        maxWidth: '500px',
+        minWidth: '400px',
+        maxWidth: '600px',
         boxShadow: `0 8px 40px rgba(168, 85, 247, 0.4), 0 0 0 1px rgba(168, 85, 247, 0.1)`,
         animation: 'slideUp 0.3s ease-out',
       }}
@@ -96,17 +102,17 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-            AI Suggestion
+            AI Co-Pilot
           </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+          <div style={{ fontSize: 11, color: C.purple, marginTop: 2 }}>
             {suggestion.intent}
           </div>
         </div>
         <div
           style={{
             padding: '3px 10px',
-            backgroundColor: `${typeColors[suggestion.type] || C.purple}20`,
-            color: typeColors[suggestion.type] || C.purple,
+            backgroundColor: `${C.purple}20`,
+            color: C.purple,
             borderRadius: 6,
             fontSize: 10,
             fontWeight: 600,
@@ -114,7 +120,7 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
             letterSpacing: '0.05em',
           }}
         >
-          {suggestion.type}
+          {suggestion.changes.length} change{suggestion.changes.length !== 1 ? 's' : ''}
         </div>
       </div>
 
@@ -125,7 +131,7 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
           padding: 12,
           marginBottom: 14,
           border: `1px solid ${C.border}`,
-          maxHeight: 120,
+          maxHeight: 200,
           overflow: 'auto',
         }}
       >
@@ -135,7 +141,7 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
             onChange={(e) => setEditedCode(e.target.value)}
             style={{
               width: '100%',
-              minHeight: 80,
+              minHeight: 100,
               backgroundColor: 'transparent',
               border: 'none',
               color: C.purple,
@@ -148,19 +154,46 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
             autoFocus
           />
         ) : (
-          <pre
-            style={{
-              margin: 0,
-              color: C.purple,
-              fontFamily: "'JetBrains Mono', 'Fragment Mono', monospace",
-              fontSize: 12,
-              lineHeight: 1.5,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            {suggestion.code}
-          </pre>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {suggestion.changes.map((change, i) => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 10, color: C.muted, fontFamily: "'Fragment Mono', monospace" }}>
+                  Line {change.lineNumber}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <div
+                    style={{
+                      flex: 1,
+                      padding: '4px 8px',
+                      backgroundColor: `${C.red}15`,
+                      borderRadius: 4,
+                      fontFamily: "'JetBrains Mono', 'Fragment Mono', monospace",
+                      fontSize: 12,
+                      color: C.red,
+                      textDecoration: 'line-through',
+                      opacity: 0.7,
+                    }}
+                  >
+                    {change.original}
+                  </div>
+                  <ArrowRight size={14} color={C.muted} style={{ marginTop: 4, flexShrink: 0 }} />
+                  <div
+                    style={{
+                      flex: 1,
+                      padding: '4px 8px',
+                      backgroundColor: `${C.green}15`,
+                      borderRadius: 4,
+                      fontFamily: "'JetBrains Mono', 'Fragment Mono', monospace",
+                      fontSize: 12,
+                      color: C.green,
+                    }}
+                  >
+                    {change.fixed}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
@@ -181,7 +214,6 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
                 fontSize: 12,
                 fontWeight: 500,
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
               }}
             >
               <X size={14} /> Cancel
@@ -200,10 +232,9 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
               }}
             >
-              <CheckCircle size={14} /> Save
+              <CheckCircle size={14} /> Apply
             </button>
           </>
         ) : (
@@ -222,18 +253,9 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
                 fontSize: 12,
                 fontWeight: 500,
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = '#ef4444';
-                e.currentTarget.style.color = '#ef4444';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = C.border;
-                e.currentTarget.style.color = C.muted;
               }}
             >
-              <X size={14} /> Reject
+              <X size={14} /> Dismiss
             </button>
             <button
               onClick={handleModify}
@@ -249,10 +271,9 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
                 fontSize: 12,
                 fontWeight: 500,
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
               }}
             >
-              <Edit2 size={14} /> Modify
+              <Edit2 size={14} /> Edit
             </button>
             <button
               onClick={onAccept}
@@ -268,16 +289,7 @@ export function SuggestionBlock({ suggestion, onAccept, onReject, onModify }: Su
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
                 boxShadow: `0 2px 8px rgba(34, 197, 94, 0.3)`,
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(34, 197, 94, 0.4)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(34, 197, 94, 0.3)';
               }}
             >
               <CheckCircle size={14} /> Accept

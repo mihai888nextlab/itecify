@@ -78,6 +78,80 @@ const aiSuggestionMark = Decoration.mark({ class: 'cm-ai-suggestion' });
 const aiHeaderMark = Decoration.mark({ class: 'cm-ai-header' });
 const ghostTextMark = Decoration.mark({ class: 'cm-ghost-text' });
 
+const changedLineMark = Decoration.line({ class: 'cm-changed-line' });
+const changedLineGutterMark = Decoration.line({ class: 'cm-changed-line-gutter' });
+
+const iTECifyThemeWithHighlights = EditorView.theme({
+  '&': {
+    backgroundColor: '#020617',
+    color: '#f1f5f9',
+  },
+  '.cm-content': {
+    caretColor: '#3b82f6',
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  '.cm-cursor': {
+    borderLeftColor: '#3b82f6',
+  },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+    backgroundColor: 'rgba(59, 130, 246, 0.3)',
+  },
+  '.cm-activeLine': {
+    backgroundColor: 'rgba(59, 130, 246, 0.05)',
+  },
+  '.cm-gutters': {
+    backgroundColor: '#0f172a',
+    color: '#64748b',
+    border: 'none',
+    borderRight: '1px solid #334155',
+  },
+  '.cm-activeLineGutter': {
+    backgroundColor: '#1e293b',
+  },
+  '.cm-lineNumbers .cm-gutterElement': {
+    padding: '0 16px 0 8px',
+  },
+  '.cm-ySelectionInfo': {
+    padding: '2px 6px',
+    borderRadius: '4px',
+    fontSize: '10px',
+    fontFamily: 'var(--font-mono)',
+    whiteSpace: 'nowrap',
+  },
+  '.cm-ai-block': {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+    borderBottom: '2px solid rgba(139, 92, 246, 0.4)',
+  },
+  '.cm-ai-suggestion': {
+    backgroundColor: 'rgba(139, 92, 246, 0.25)',
+    borderBottom: '2px solid #8b5cf6',
+    borderRadius: '2px',
+    padding: '0 2px',
+  },
+  '.cm-ai-header': {
+    color: '#a855f7',
+    fontWeight: 'bold',
+    fontStyle: 'italic',
+  },
+  '.cm-ghost-text': {
+    opacity: 0.6,
+    fontStyle: 'italic',
+    color: '#a855f7',
+    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+    borderRadius: '3px',
+    padding: '0 2px',
+  },
+  '.cm-changed-line': {
+    backgroundColor: 'rgba(168, 85, 247, 0.25)',
+    borderLeft: '3px solid #a855f7',
+    marginLeft: '-3px',
+    paddingLeft: '3px',
+  },
+  '.cm-changed-line-gutter': {
+    backgroundColor: 'rgba(168, 85, 247, 0.4)',
+  },
+});
+
 interface GhostTextState {
   text: string;
   from: number;
@@ -88,6 +162,8 @@ const setGhostText = StateEffect.define<GhostTextState | null>();
 const clearGhostText = StateEffect.define<void>();
 
 const setAICursor = StateEffect.define<{ position: number } | null>();
+const setHighlightedLines = StateEffect.define<number[] | null>();
+const applyFullCode = StateEffect.define<string | null>();
 
 const aiCursorField = StateField.define<DecorationSet>({
   create() {
@@ -171,6 +247,39 @@ const aiHighlightsField = StateField.define<DecorationSet>({
   provide: f => EditorView.decorations.from(f),
 });
 
+const highlightedLinesField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setHighlightedLines)) {
+        decorations = Decoration.none;
+        if (effect.value && effect.value.length > 0) {
+          const doc = tr.state.doc;
+          const lineNumbers = new Set(effect.value);
+          const decoArray: { from: number; to: number; value: any }[] = [];
+          
+          for (let i = 1; i <= doc.lines; i++) {
+            if (lineNumbers.has(i)) {
+              const line = doc.line(i);
+              decoArray.push({
+                from: line.from,
+                to: line.to,
+                value: changedLineMark,
+              });
+            }
+          }
+          
+          decorations = decorations.update({ add: decoArray });
+        }
+      }
+    }
+    return decorations;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
+
 interface CodeEditorProps {
   projectId: string;
   user: { id: string; name: string; color: string };
@@ -184,8 +293,9 @@ interface CodeEditorProps {
   onAIReject?: (fn: () => void) => void;
   onHasAISuggestion?: (has: boolean) => void;
   onAICopilotEnabled?: (enabled: boolean) => void;
-  onGhostText?: (fn: (text: string, from: number) => void) => void;
-  onClearGhostText?: (fn: () => void) => void;
+  onHighlightChanges?: (fn: (lineNumbers: number[]) => void) => void;
+  onClearHighlights?: (fn: () => void) => void;
+  onApplyFixedCode?: (fn: (code: string, changedLines: number[]) => void) => void;
   onCursorMove?: (fn: (position: { line: number; ch: number }) => void) => void;
   onSetAICursor?: (fn: (position: number | null) => void) => void;
 }
@@ -201,7 +311,7 @@ function getLanguageExtension(language: string): Extension {
   }
 }
 
-export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent, onChatMessages, onAddChatMessage, onInsertAIContent, onAIAccept, onAIReject, onHasAISuggestion, onAICopilotEnabled, onGhostText, onClearGhostText, onCursorMove, onSetAICursor }: CodeEditorProps) {
+export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange, onSetContent, onChatMessages, onAddChatMessage, onInsertAIContent, onAIAccept, onAIReject, onHasAISuggestion, onAICopilotEnabled, onHighlightChanges, onClearHighlights, onApplyFixedCode, onCursorMove, onSetAICursor }: CodeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const providerRef = useRef<any>(null);
@@ -217,10 +327,11 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   const onAIRejectRef = useRef(onAIReject);
   const onHasAISuggestionRef = useRef(onHasAISuggestion);
   const onAICopilotEnabledRef = useRef(onAICopilotEnabled);
-  const onGhostTextRef = useRef(onGhostText);
-  const onClearGhostTextRef = useRef(onClearGhostText);
   const onCursorMoveRef = useRef(onCursorMove);
   const onSetAICursorRef = useRef(onSetAICursor);
+  const onHighlightChangesRef = useRef(onHighlightChanges);
+  const onClearHighlightsRef = useRef(onClearHighlights);
+  const onApplyFixedCodeRef = useRef(onApplyFixedCode);
   const editorSetContentRef = useRef<((fileId: string, content: string) => void) | null>(null);
   const aiSuggestionRef = useRef<{ from: number; to: number } | null>(null);
   const [connectedUsers, setConnectedUsers] = useState<User[]>([]);
@@ -240,8 +351,9 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   onAIRejectRef.current = onAIReject;
   onHasAISuggestionRef.current = onHasAISuggestion;
   onAICopilotEnabledRef.current = onAICopilotEnabled;
-  onGhostTextRef.current = onGhostText;
-  onClearGhostTextRef.current = onClearGhostText;
+  onHighlightChangesRef.current = onHighlightChanges;
+  onClearHighlightsRef.current = onClearHighlights;
+  onApplyFixedCodeRef.current = onApplyFixedCode;
   onCursorMoveRef.current = onCursorMove;
   onSetAICursorRef.current = onSetAICursor;
 
@@ -260,7 +372,7 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
   }, []);
 
   useEffect(() => {
-    if (activeFileId && ytextMapRef.current.size > 0) {
+    if (activeFileId && ydocRef.current) {
       const findFile = (nodes: FileNode[]): FileNode | null => {
         for (const n of nodes) {
           if (n.id === activeFileId) return n;
@@ -273,11 +385,27 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
       };
       const file = findFile(files);
       if (file && file.content !== undefined) {
-        const ytext = ytextMapRef.current.get(file.id);
-        if (ytext && ytext.toString() !== file.content) {
-          ytext.delete(0, ytext.length);
-          if (file.content) {
-            ytext.insert(0, file.content);
+        const ytextKey = `file:${file.id}`;
+        let ytext = ytextMapRef.current.get(ytextKey);
+        
+        if (!ytext || !ytext.parent) {
+          ytext = ydocRef.current.getText(ytextKey);
+          ytextMapRef.current.set(ytextKey, ytext);
+        }
+        
+        if (ytext && ytext.parent && ytext.toString() !== file.content) {
+          try {
+            ydocRef.current.transact(() => {
+              const oldLen = ytext.length;
+              if (oldLen > 0) {
+                ytext.delete(0, oldLen);
+              }
+              if (file.content) {
+                ytext.insert(0, file.content);
+              }
+            });
+          } catch (e) {
+            console.log('[SyncFromStore] ytext operation failed:', e);
           }
         }
       }
@@ -309,36 +437,37 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
     let isLocalChange = false;
     ytextMapRef.current = ytextMap;
 
-    const setEditorContent = (fileId: string, content: string) => {
-      const ytextKey = `file:${fileId}`;
-      console.log('[SETEDITOR] fileId:', fileId, 'ytextKey:', ytextKey);
-      console.log('[SETEDITOR] Content to set:');
-      console.log(content);
-      
-      let ytext = ytextMap.get(ytextKey);
-      console.log('[SETEDITOR] ytext found with key', ytextKey, ':', !!ytext, 'current length:', ytext?.length);
-      
-      if (!ytext && ydoc) {
-        ytext = ydoc.getText(ytextKey);
-        ytextMap.set(ytextKey, ytext);
-        console.log('[SETEDITOR] Created new ytext with key:', ytextKey);
-      }
-      
-      if (ytext) {
-        const oldLen = ytext.length;
-        isLocalChange = true;
-        if (oldLen > 0) {
-          ytext.delete(0, oldLen);
+      const setEditorContent = (fileId: string, content: string) => {
+        const ytextKey = `file:${fileId}`;
+        
+        let ytext = ytextMap.get(ytextKey);
+        
+        if (!ytext || !ytext.parent) {
+          if (ydoc) {
+            ytext = ydoc.getText(ytextKey);
+            ytextMap.set(ytextKey, ytext);
+          }
         }
-        ytext.insert(0, content);
+        
+        if (!ytext || !ytext.parent || !ydoc) {
+          console.log('[SETEDITOR] ytext not ready, skipping');
+          return;
+        }
+        
+        isLocalChange = true;
+        try {
+          ydoc.transact(() => {
+            const oldLen = ytext.length;
+            if (oldLen > 0) {
+              ytext.delete(0, oldLen);
+            }
+            ytext.insert(0, content);
+          });
+        } catch (e) {
+          console.log('[SETEDITOR] ytext operation failed:', e);
+        }
         isLocalChange = false;
-        console.log('[SETEDITOR] Updated ytext, new length:', ytext.length);
-        console.log('[SETEDITOR] Ytext content now:');
-        console.log(ytext.toString());
-      } else {
-        console.log('[SETEDITOR] ERROR: No ytext found!');
-      }
-    };
+      };
     
     editorSetContentRef.current = setEditorContent;
     
@@ -615,10 +744,10 @@ export function CodeEditor({ projectId, user, onUsersChange, onConnectionChange,
           autocompletion(),
           syntaxHighlighting(defaultHighlightStyle),
           oneDark,
-          iTECifyTheme,
+          iTECifyThemeWithHighlights,
           yRemoteSelectionsTheme,
           aiHighlightsField,
-          ghostTextField,
+          highlightedLinesField,
           aiCursorField,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           file?.language === 'python' ? python() : javascript({ typescript: file?.language === 'typescript' }),
@@ -807,40 +936,81 @@ greet('iTEC 2026');
         onAIRejectRef.current(rejectAISuggestion);
       }
 
-      const showGhostText = (text: string, from: number) => {
-        if (view) {
-          view.dispatch({
-            effects: [setGhostText.of({ text, from, to: from + text.length })],
-          });
-          console.log('[GhostText] Applied at position:', from);
-        }
+      const highlightChanges = (lineNumbers: number[]) => {
+        console.log('[HighlightChanges] Lines highlighted:', lineNumbers);
       };
       
-      const hideGhostText = () => {
-        if (view) {
-          view.dispatch({
-            effects: [clearGhostText.of()],
-          });
-        }
+      const clearHighlights = () => {
+        console.log('[ClearHighlights] Cleared');
       };
       
-      if (onGhostTextRef.current) {
-        onGhostTextRef.current(showGhostText);
+      const applyFixedCode = (code: string, changedLines: number[]) => {
+        const fileId = useEditorStore.getState().activeFileId;
+        if (!fileId || !ydocRef.current) return;
+        
+        const ytextKey = `file:${fileId}`;
+        let ytext = ytextMap.get(ytextKey);
+        
+        if (!ytext || !ytext.parent) {
+          ytext = ydocRef.current.getText(ytextKey);
+          ytextMap.set(ytextKey, ytext);
+        }
+        
+        if (ytext && ytext.parent) {
+          try {
+            ydocRef.current.transact(() => {
+              const oldLen = ytext.length;
+              if (oldLen > 0) {
+                ytext.delete(0, oldLen);
+              }
+              ytext.insert(0, code);
+            });
+            console.log('[ApplyFixedCode] Yjs updated successfully');
+          } catch (e) {
+            console.log('[ApplyFixedCode] Yjs update failed:', e);
+          }
+        } else {
+          console.log('[ApplyFixedCode] ytext still has no parent');
+        }
+        
+        updateFileContent(fileId, code);
+        
+        setTimeout(() => {
+          const currentFiles = useEditorStore.getState().files;
+          const findFile = (nodes: FileNode[]): FileNode | null => {
+            for (const n of nodes) {
+              if (n.id === fileId) return n;
+              if (n.children) {
+                const f = findFile(n.children);
+                if (f) return f;
+              }
+            }
+            return null;
+          };
+          const file = findFile(currentFiles);
+          if (file && file.content === code) {
+            console.log('[ApplyFixedCode] Store matches Yjs - sync complete');
+          }
+        }, 100);
+        
+        console.log('[ApplyFixedCode] Store updated with', changedLines.length, 'changes');
+      };
+      
+      if (onHighlightChangesRef.current) {
+        onHighlightChangesRef.current(highlightChanges);
       }
-      if (onClearGhostTextRef.current) {
-        onClearGhostTextRef.current(hideGhostText);
+      if (onClearHighlightsRef.current) {
+        onClearHighlightsRef.current(clearHighlights);
+      }
+      if (onApplyFixedCodeRef.current) {
+        onApplyFixedCodeRef.current(applyFixedCode);
       }
       if (onAICopilotEnabledRef.current) {
         onAICopilotEnabledRef.current(true);
       }
       
       const setAICursorPosition = (position: number | null) => {
-        if (view) {
-          view.dispatch({
-            effects: [setAICursor.of(position !== null ? { position } : null)],
-          });
-          console.log('[AI Cursor] Position set to:', position);
-        }
+        console.log('[AI Cursor] Position set to:', position);
       };
       
       if (onSetAICursorRef.current) {

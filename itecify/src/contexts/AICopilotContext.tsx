@@ -10,13 +10,18 @@ export interface Position {
   ch: number;
 }
 
+export interface ChangedLine {
+  lineNumber: number;
+  original: string;
+  fixed: string;
+}
+
 export interface Suggestion {
   id: string;
-  code: string;
-  from: number;
-  to: number;
-  type: 'refactor' | 'optimize' | 'fix' | 'explain';
+  fixedCode: string;
+  changes: ChangedLine[];
   intent: string;
+  explanation?: string;
 }
 
 export interface AICopilotState {
@@ -150,11 +155,11 @@ export function AICopilotProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.suggestion]);
 
-  const modifySuggestion = useCallback((code: string) => {
+  const modifySuggestion = useCallback((fixedCode: string) => {
     if (state.suggestion) {
       dispatch({
         type: 'SET_SUGGESTION',
-        suggestion: { ...state.suggestion, code },
+        suggestion: { ...state.suggestion, fixedCode },
       });
     }
   }, [state.suggestion]);
@@ -200,19 +205,18 @@ export function AICopilotProvider({ children }: { children: React.ReactNode }) {
 
       const data = await res.json();
 
-      if (data.suggestion) {
+      if (data.hasChanges && data.changes && data.changes.length > 0) {
         dispatch({
           type: 'SET_SUGGESTION',
           suggestion: {
             id: `suggestion-${Date.now()}`,
-            code: data.suggestion.code,
-            from: data.suggestion.from || cursor,
-            to: data.suggestion.to || cursor,
-            type: data.suggestion.type || 'refactor',
-            intent: data.intent || 'Suggested improvement',
+            fixedCode: data.fixedCode,
+            changes: data.changes,
+            intent: data.intent || 'Code fixed',
+            explanation: data.explanation,
           },
         });
-        dispatch({ type: 'SET_INTENT', intent: data.intent || 'Suggestion ready' });
+        dispatch({ type: 'SET_INTENT', intent: data.intent || 'Code fixed' });
       } else {
         dispatch({ type: 'SET_STATUS', status: 'idle' });
         dispatch({ type: 'SET_INTENT', intent: '' });

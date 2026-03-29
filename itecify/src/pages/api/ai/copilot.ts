@@ -10,12 +10,10 @@ interface CopilotRequest {
   filename?: string;
 }
 
-interface Suggestion {
-  intent: string;
-  type: 'refactor' | 'optimize' | 'fix' | 'security' | 'best-practice';
-  code?: string;
-  explanation: string;
-  severity: 'high' | 'medium' | 'low';
+interface ChangedLine {
+  lineNumber: number;
+  original: string;
+  fixed: string;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -35,40 +33,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'GROQ_API_KEY not configured' });
   }
 
-  const systemPrompt = `You are an expert ${language || 'JavaScript'} developer reviewing code.
+  const systemPrompt = `You are an expert ${language || 'JavaScript'} code analyzer.
 
-REVIEW THE CODE AND:
-1. Find syntax errors (code that won't run)
-2. Find type errors (wrong types, like TypeScript in JS)
-3. Find logic errors (code runs but does wrong thing)
-4. Find undefined/null access issues
-5. Find security vulnerabilities
+Look for ACTUAL ERRORS in the code:
+1. Syntax errors - code that won't run at all
+2. Type errors - using wrong variable types (e.g., "int" in JavaScript)
+3. Undefined variables - using variables that weren't declared
+4. Logic errors - code that runs but does the wrong thing
+5. Missing brackets, parentheses, or semicolons that break the code
 
-DO NOT SUGGEST:
-- Adding semicolons
-- Changing quote styles
-- Style preferences
-- Code refactoring (unless there's a real bug)
+Examples of bugs to fix:
+- JavaScript: "int x = 10" → should be "let x = 10"
+- Python: "print("hello" (missing closing paren)
+- JavaScript: "console.log(undefinedVar)" where undefinedVar doesn't exist
+- Any language: mismatched brackets/braces
 
-FOR EACH REAL ISSUE FOUND, RETURN:
-- intent: Plain English description of the problem
-- type: "fix" or "security"
-- code: The corrected code (if applicable)
-- explanation: Brief explanation in plain English
-- severity: "high" if it will crash, "medium" otherwise
+Return this EXACT JSON format:
+{
+  "hasChanges": true,
+  "fixedCode": "THE ENTIRE CODE WITH FIXES",
+  "changes": [
+    {"lineNumber": 1, "original": "int x = 10", "fixed": "let x = 10"}
+  ],
+  "intent": "Fix: [brief description]",
+  "explanation": "[one sentence explanation]"
+}
 
-RETURN EMPTY ARRAY [] IF CODE IS CORRECT.
-Return ONLY JSON, no explanations.`;
-  
-  const userPrompt = `Language: ${language || 'JavaScript'}
+If NO bugs found: {"hasChanges": false, "fixedCode": "", "changes": [], "intent": "No issues found"}`;
+
+  const userPrompt = `Find and fix bugs in this ${language || 'JavaScript'} code:
+
 ${filename ? `File: ${filename}` : ''}
 
-Code to analyze:
 \`\`\`${language || 'javascript'}
 ${code}
 \`\`\`
 
-Return JSON array only:`;
+Return the COMPLETE fixed code and list each change with line numbers.
+IMPORTANT: Only fix actual bugs, not style preferences.`;
 
   try {
     const response = await fetch(GROQ_API_URL, {
@@ -78,13 +80,13 @@ Return JSON array only:`;
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.1-70b-versatile',
+        model: 'llama-3.1-8b-instant',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.3,
-        max_tokens: 2048,
+        temperature: 0.2,
+        max_tokens: 4096,
       }),
     });
 
@@ -97,32 +99,41 @@ Return JSON array only:`;
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
 
-    let suggestions: Suggestion[] = [];
+    console.log('[AI Copilot] Raw AI response:', content);
+
+    let parsed: any = null;
     try {
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        suggestions = JSON.parse(jsonMatch[0]);
+        parsed = JSON.parse(jsonMatch[0]);
+        console.log('[AI Copilot] Parsed JSON:', JSON.stringify(parsed, null, 2));
       }
     } catch (e) {
-      console.error('Failed to parse AI response:', e);
+      console.error('[AI Copilot] Failed to parse AI response:', e, 'Content:', content);
     }
 
-    const topSuggestion = suggestions.length > 0 ? suggestions[0] : null;
+    if (parsed && parsed.hasChanges && parsed.changes && parsed.changes.length > 0) {
+      const changedLines: ChangedLine[] = parsed.changes.map((c: any) => ({
+        lineNumber: c.lineNumber,
+        original: c.original,
+        fixed: c.fixed,
+      }));
+
+      return res.status(200).json({
+        success: true,
+        intent: parsed.intent || 'Code fixed',
+        explanation: parsed.explanation,
+        hasChanges: true,
+        fixedCode: parsed.fixedCode,
+        changes: changedLines,
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      intent: topSuggestion?.intent || 'Code looks good!',
-      type: topSuggestion?.type || null,
-      suggestion: topSuggestion?.code ? {
-        code: topSuggestion.code,
-        type: topSuggestion.type,
-        explanation: topSuggestion.explanation,
-        severity: topSuggestion.severity,
-        from: 0,
-        to: code.length,
-      } : null,
-      allSuggestions: suggestions,
-      cursorPosition,
+      intent: 'Code looks good!',
+      hasChanges: false,
+      changes: [],
     });
   } catch (error: any) {
     console.error('AI copilot error:', error);

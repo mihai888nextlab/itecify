@@ -563,16 +563,16 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   
   const [aiCopilotEnabled, setAiCopilotEnabled] = useState(false);
   const [aiCopilotIntent, setAiCopilotIntent] = useState('');
+  const [aiCopilotExplanation, setAiCopilotExplanation] = useState('');
   const [aiCopilotSuggestion, setAiCopilotSuggestion] = useState<{
     id: string;
-    code: string;
-    from: number;
-    to: number;
-    type: 'refactor' | 'optimize' | 'fix' | 'explain';
+    fixedCode: string;
+    changes: { lineNumber: number; original: string; fixed: string }[];
     intent: string;
   } | null>(null);
-  const ghostTextRef = React.useRef<((text: string, from: number) => void) | null>(null);
-  const clearGhostTextRef = React.useRef<(() => void) | null>(null);
+  const highlightChangesRef = React.useRef<((lineNumbers: number[]) => void) | null>(null);
+  const clearHighlightsRef = React.useRef<(() => void) | null>(null);
+  const applyFixedCodeRef = React.useRef<((code: string, changedLines: number[]) => void) | null>(null);
   const cursorMoveRef = React.useRef<((position: { line: number; ch: number }) => void) | null>(null);
   
   const enableAICopilot = useCallback(() => {
@@ -588,9 +588,10 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
   const disableAICopilot = useCallback(() => {
     setAiCopilotEnabled(false);
     setAiCopilotIntent('');
+    setAiCopilotExplanation('');
     setAiCopilotSuggestion(null);
-    if (clearGhostTextRef.current) {
-      clearGhostTextRef.current();
+    if (clearHighlightsRef.current) {
+      clearHighlightsRef.current();
     }
     if (setAICursorRef.current) {
       setAICursorRef.current(null);
@@ -600,12 +601,16 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
     }
   }, []);
   
-  const handleGhostText = React.useCallback((fn: (text: string, from: number) => void) => {
-    ghostTextRef.current = fn;
+  const handleHighlightChanges = React.useCallback((fn: (lineNumbers: number[]) => void) => {
+    highlightChangesRef.current = fn;
   }, []);
   
-  const handleClearGhostText = React.useCallback((fn: () => void) => {
-    clearGhostTextRef.current = fn;
+  const handleClearHighlights = React.useCallback((fn: () => void) => {
+    clearHighlightsRef.current = fn;
+  }, []);
+  
+  const handleApplyFixedCode = React.useCallback((fn: (code: string, changedLines: number[]) => void) => {
+    applyFixedCodeRef.current = fn;
   }, []);
   
   const handleAICopilotEnabled = React.useCallback((enabled: boolean) => {
@@ -916,10 +921,7 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
 
       setAiLastTrigger(Date.now());
       setAiCopilotIntent('Analyzing code...');
-
-      if (setAICursorRef.current) {
-        setAICursorRef.current(0);
-      }
+      setAiCopilotExplanation('');
 
       try {
         const res = await fetch(`/api/ai/copilot`, {
@@ -940,31 +942,39 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
 
         const data = await res.json();
 
-        if (data.suggestion && data.suggestion.code) {
-          setAiCopilotIntent(data.intent);
+        if (data.hasChanges && data.changes && data.changes.length > 0) {
+          setAiCopilotIntent(data.intent || 'Code fixed');
+          setAiCopilotExplanation(data.explanation || '');
           setAiCopilotSuggestion({
             id: `suggestion-${Date.now()}`,
-            code: data.suggestion.code,
-            from: data.suggestion.from || 0,
-            to: data.suggestion.to || 0,
-            type: data.suggestion.type || 'fix',
+            fixedCode: data.fixedCode,
+            changes: data.changes,
             intent: data.intent,
           });
 
-          if (ghostTextRef.current && data.suggestion.from !== undefined) {
-            ghostTextRef.current(data.suggestion.code, data.suggestion.from);
+          const lineNumbers = data.changes.map((c: any) => c.lineNumber);
+          if (highlightChangesRef.current) {
+            highlightChangesRef.current(lineNumbers);
           }
 
-          if (setAICursorRef.current && data.suggestion.from !== undefined) {
-            setAICursorRef.current(data.suggestion.from);
+          if (setAICursorRef.current && lineNumbers.length > 0) {
+            const firstLine = lineNumbers[0];
+            let pos = 0;
+            const lines = code.split('\n');
+            for (let i = 0; i < firstLine - 1 && i < lines.length; i++) {
+              pos += lines[i].length + 1;
+            }
+            setAICursorRef.current(pos);
           }
         } else {
           setAiCopilotIntent('');
+          setAiCopilotExplanation('');
           setAiCopilotSuggestion(null);
         }
       } catch (error: any) {
         console.error('[AI Co-Pilot] Error:', error);
         setAiCopilotIntent('');
+        setAiCopilotExplanation('');
       }
     };
 
@@ -1766,8 +1776,9 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                     onAIReject={handleAIReject}
                     onHasAISuggestion={handleHasAISuggestion}
                     onAICopilotEnabled={handleAICopilotEnabled}
-                    onGhostText={handleGhostText}
-                    onClearGhostText={handleClearGhostText}
+                    onHighlightChanges={handleHighlightChanges}
+                    onClearHighlights={handleClearHighlights}
+                    onApplyFixedCode={handleApplyFixedCode}
                     onSetAICursor={handleSetAICursor}
                   />
                 ) : (
@@ -1778,31 +1789,35 @@ export function WorkspaceLayout({ sessionId, currentUser, project }: WorkspaceLa
                   />
                 )}
                 
-                {aiCopilotEnabled && (
+                {aiCopilotEnabled && aiCopilotSuggestion && (
                   <>
                     <IntentBubble
                       intent={aiCopilotIntent}
                       isVisible={!!aiCopilotIntent}
+                      explanation={aiCopilotExplanation}
                     />
                     <SuggestionBlock
                       suggestion={aiCopilotSuggestion}
                       onAccept={() => {
-                        if (aiCopilotSuggestion && insertAIContentRef.current) {
-                          insertAIContentRef.current(aiCopilotSuggestion.code);
+                        if (aiCopilotSuggestion && applyFixedCodeRef.current) {
+                          const lineNumbers = aiCopilotSuggestion.changes.map(c => c.lineNumber);
+                          applyFixedCodeRef.current(aiCopilotSuggestion.fixedCode, lineNumbers);
                           setAiCopilotSuggestion(null);
                           setAiCopilotIntent('');
+                          setAiCopilotExplanation('');
                         }
                       }}
                       onReject={() => {
                         setAiCopilotSuggestion(null);
                         setAiCopilotIntent('');
-                        if (clearGhostTextRef.current) {
-                          clearGhostTextRef.current();
+                        setAiCopilotExplanation('');
+                        if (clearHighlightsRef.current) {
+                          clearHighlightsRef.current();
                         }
                       }}
                       onModify={(code) => {
                         if (aiCopilotSuggestion) {
-                          setAiCopilotSuggestion({ ...aiCopilotSuggestion, code });
+                          setAiCopilotSuggestion({ ...aiCopilotSuggestion, fixedCode: code });
                         }
                       }}
                     />
